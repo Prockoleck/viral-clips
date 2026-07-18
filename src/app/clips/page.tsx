@@ -72,20 +72,20 @@ export default function ClipsPage() {
       setProgress(0);
 
       const chunks = await chunkAudio(audioBlob, videoDuration, handleProgress);
-      let allWords: { text: string; start: number; end: number }[] = [];
+      let allSegments: { start: number; end: number; text: string }[] = [];
 
       for (let i = 0; i < chunks.length; i++) {
         setProgressLabel(`Transcribing chunk ${i + 1}/${chunks.length}...`);
         const result = await transcribeAudio(chunks[i].chunk, chunks[i].offset);
-        allWords = allWords.concat(result.words);
+        allSegments = allSegments.concat(result.segments);
       }
 
-      const fullTranscript = allWords.map((w) => w.text).join(" ");
+      const fullTranscript = allSegments.map((s) => s.text).join(" ");
 
       setStep("scoring");
       setProgressLabel("Analyzing for viral moments...");
       setProgress(30);
-      const picks = await scoreTranscript(fullTranscript, allWords, videoDuration, topN);
+      const picks = await scoreTranscript(fullTranscript, allSegments, videoDuration, topN);
 
       if (!picks.length) {
         setError("No viral moments detected in this video.");

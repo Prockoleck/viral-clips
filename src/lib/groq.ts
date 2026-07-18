@@ -4,9 +4,22 @@ export type GroqWord = {
   end: number;
 };
 
+export type GroqSegment = {
+  start: number;
+  end: number;
+  text: string;
+};
+
+export type GroqSentence = {
+  text: string;
+  start: number;
+  end: number;
+};
+
 export type GroqTranscript = {
   text: string;
   words: GroqWord[];
+  segments: GroqSegment[];
 };
 
 export type ClipPick = {
@@ -17,7 +30,7 @@ export type ClipPick = {
 };
 
 function estimateWordsFromSegments(
-  segments: { start: number; end: number; text: string }[],
+  segments: GroqSegment[],
   timeOffset: number
 ): GroqWord[] {
   const words: GroqWord[] = [];
@@ -28,7 +41,7 @@ function estimateWordsFromSegments(
     const perWord = duration / tokens.length;
     for (let i = 0; i < tokens.length; i++) {
       words.push({
-        text: tokens[i].replace(/[^\w\s'-]/g, ""),
+        text: tokens[i],
         start: Math.round((seg.start + i * perWord + timeOffset) * 100) / 100,
         end: Math.round((seg.start + (i + 1) * perWord + timeOffset) * 100) / 100,
       });
@@ -37,21 +50,54 @@ function estimateWordsFromSegments(
   return words;
 }
 
-function buildTimestampedTranscript(words: GroqWord[]): string {
-  if (words.length === 0) return "";
-  const lines: string[] = [];
-  const chunkSize = 20;
+function splitSegmentsIntoSentences(segments: GroqSegment[]): GroqSentence[] {
+  const sentences: GroqSentence[] = [];
 
-  for (let i = 0; i < words.length; i += chunkSize) {
-    const chunk = words.slice(i, i + chunkSize);
-    const line = chunk
-      .map((w) => `  ${w.start.toFixed(2)}s  ${w.text}`)
-      .join("\n");
-    lines.push(line);
+  for (const seg of segments) {
+    const text = seg.text.trim();
+    if (!text) continue;
+
+    const rawParts = text.match(/[^.!?]*[.!?]+/g);
+    const parts: string[] = [];
+
+    if (rawParts && rawParts.length > 1) {
+      for (const p of rawParts) {
+        const trimmed = p.trim();
+        if (trimmed) parts.push(trimmed);
+      }
+    } else {
+      const trimmed = text.trim();
+      if (trimmed) parts.push(trimmed);
+    }
+
+    if (parts.length === 0) continue;
+
+    const partWordCounts = parts.map((p) => p.split(/\s+/).length);
+    const totalWords = partWordCounts.reduce((a, b) => a + b, 0);
+    const segDuration = seg.end - seg.start;
+
+    let wordOffset = 0;
+    for (let i = 0; i < parts.length; i++) {
+      const pStart = seg.start + (wordOffset / totalWords) * segDuration;
+      wordOffset += partWordCounts[i];
+      const pEnd = seg.start + (wordOffset / totalWords) * segDuration;
+
+      sentences.push({
+        text: parts[i],
+        start: Math.round(pStart * 100) / 100,
+        end: Math.round(pEnd * 100) / 100,
+      });
+    }
   }
 
-  return `WORD TIMESTAMPS (format: "start_time  word"):
-${lines.join("\n")}`;
+  return sentences;
+}
+
+function buildSentenceTranscript(sentences: GroqSentence[]): string {
+  if (sentences.length === 0) return "";
+  return sentences
+    .map((s, i) => `SENTENCE ${i + 1} [${s.start.toFixed(2)}s → ${s.end.toFixed(2)}s]: ${s.text}`)
+    .join("\n");
 }
 
 function autoDetectContentType(transcript: string): string {
@@ -80,73 +126,34 @@ function autoDetectContentType(transcript: string): string {
   return "general";
 }
 
-function snapStartToWordBoundary(words: GroqWord[], targetSeconds: number): number {
-  if (words.length === 0) return targetSeconds;
+function snapToSentenceBoundary(sentences: GroqSentence[], targetSeconds: number, side: "start" | "end"): number {
+  if (sentences.length === 0) return targetSeconds;
 
-  const sentenceStarts = new Set<number>();
-  for (let i = 0; i < words.length; i++) {
-    const isStartOfSegment = i === 0;
-    const prevEndsSentence = i > 0 && /[.!?:]$/.test(words[i - 1].text);
-    const wordStartsUpper = words[i].text.length > 0 && /[A-Z]/.test(words[i].text[0]);
-    if (isStartOfSegment || prevEndsSentence || wordStartsUpper) {
-      sentenceStarts.add(words[i].start);
+  if (side === "start") {
+    let best = sentences[0].start;
+    for (const s of sentences) {
+      if (s.start <= targetSeconds + 0.5) best = s.start;
     }
-  }
-
-  const sortedStarts = Array.from(sentenceStarts).sort((a, b) => a - b);
-  let best = sortedStarts[0] ?? words[0].start;
-  for (const s of sortedStarts) {
-    if (s <= targetSeconds + 0.5) best = s;
-  }
-
-  if (best === sortedStarts[0] || best === undefined) {
-    let nearest = words[0].start;
+    return best;
+  } else {
+    let best = sentences[sentences.length - 1].end;
+    for (const s of sentences) {
+      if (s.end >= targetSeconds - 0.3 && s.end <= targetSeconds + 1) {
+        best = s.end;
+        return best;
+      }
+    }
+    let nearest = sentences[0].end;
     let minDist = Infinity;
-    for (const w of words) {
-      const dist = Math.abs(w.start - targetSeconds);
+    for (const s of sentences) {
+      const dist = Math.abs(s.end - targetSeconds);
       if (dist < minDist) {
         minDist = dist;
-        nearest = w.start;
+        nearest = s.end;
       }
     }
     return nearest;
   }
-
-  return best;
-}
-
-function snapEndToWordBoundary(words: GroqWord[], targetSeconds: number): number {
-  if (words.length === 0) return targetSeconds;
-
-  const sentenceEnds = new Set<number>();
-  for (let i = 0; i < words.length; i++) {
-    const isEndOfSegment = i === words.length - 1;
-    const endsSentence = /[.!?:]$/.test(words[i].text);
-    if (isEndOfSegment || endsSentence) {
-      sentenceEnds.add(words[i].end);
-    }
-  }
-
-  const sortedEnds = Array.from(sentenceEnds).sort((a, b) => a - b);
-  let best = sortedEnds[sortedEnds.length - 1] ?? words[words.length - 1].end;
-  for (const e of sortedEnds) {
-    if (e >= targetSeconds - 0.5 && e <= targetSeconds + 1) {
-      best = e;
-      break;
-    }
-  }
-
-  let nearest = words[words.length - 1].end;
-  let minDist = Infinity;
-  for (const w of words) {
-    const dist = Math.abs(w.end - targetSeconds);
-    if (dist < minDist) {
-      minDist = dist;
-      nearest = w.end;
-    }
-  }
-  if (targetSeconds < nearest) nearest = targetSeconds === 0 ? nearest : Math.min(targetSeconds, nearest);
-  return nearest;
 }
 
 export async function transcribeAudio(
@@ -170,76 +177,84 @@ export async function transcribeAudio(
 
   const data = await res.json();
 
-  const segments: { start: number; end: number; text: string }[] =
+  const rawSegments: { start: number; end: number; text: string }[] =
     data.segments || [];
 
-  const words = estimateWordsFromSegments(segments, timeOffset);
+  const segments = rawSegments.map((s) => ({
+    start: s.start + timeOffset,
+    end: s.end + timeOffset,
+    text: s.text.trim(),
+  }));
 
-  return { text: data.text || "", words };
+  const words = estimateWordsFromSegments(rawSegments, timeOffset);
+
+  return { text: data.text || "", words, segments };
 }
 
 export async function scoreTranscript(
   transcript: string,
-  words: GroqWord[],
+  segments: GroqSegment[],
   duration: number,
   topN: number
 ): Promise<ClipPick[]> {
+  const sentences = splitSegmentsIntoSentences(segments);
   const contentType = autoDetectContentType(transcript);
-  const tsTranscript = buildTimestampedTranscript(words);
+  const sentenceTranscript = buildSentenceTranscript(sentences);
 
   const contentTypeGuides: Record<string, string> = {
     general: `- Look for the most engaging, surprising, or emotionally resonant moments.
-- Prioritize clips that tell a complete mini-story: setup → tension → payoff.
-- If nothing stands out, pick the most information-dense 20-30 seconds.`,
+- Pick complete sentences that tell a mini-story: setup → tension → payoff.
+- If nothing stands out, pick the most information-dense 2-3 consecutive sentences.`,
 
-    funny: `- Cut right before the punchline and let the laughter/reaction play out.
-- Include the setup so the punchline lands — never cut the setup.
-- End immediately after the punchline or reaction, not during dead air.
-- Look for: unexpected twists, exaggerated reactions, "wait what" moments, roasts.
-- Comedy is timing: keep clips tight (15-25s ideal for pure jokes).`,
+    funny: `- Find the joke setup + punchline — this is usually 2-3 consecutive sentences.
+- Capture the full beat: setup → delivery → reaction.
+- Include the audience laughter or the comedian's own reaction as the closing sentence.
+- Never cut the punchline short — always include the sentence that lands the joke.
+- Look for: unexpected twists, exaggerated reactions, "wait what" moments, roasts.`,
 
-    podcast: `- Find the most quotable, controversial, or insightful 20-40 second hot take.
-- Start at the beginning of a complete thought, not mid-sentence.
-- End when the speaker finishes their point (pauses are fine, trailing off is not).
-- Look for: surprising opinions, personal stories, heated debates, "aha" insights.
-- Avoid: intros, outros, sponsor reads, "um" / filler-heavy sections.`,
+    podcast: `- Find the most quotable hot take or surprising personal story.
+- Stories usually span 3-8 consecutive sentences. Capture the whole arc.
+- Start at the sentence that sets up the story, end on the sentence with the payoff.
+- Look for: surprising confessions, strong opinions, "here's the thing" moments, emotional stories.
+- Avoid: filler sentences, "um", "like", intro/outro patter.`,
 
-    movie: `- For dialogue: include the lead-in line AND the reaction/response.
-- For action: start on the tension build (2-3s before the action), end on the money shot.
-- For emotional scenes: start on the trigger, end on the emotional reaction.
-- Keep clips tight: 10-30s. Every second must earn its place.
-- Look for: iconic lines, emotional peaks, plot twists, stunning visuals moments.`,
+    movie: `- Find iconic lines, emotional peaks, or plot twists.
+- Dialogue clips: include at least the triggering line + the reaction line.
+- Action clips: let the action breathe — don't cut mid-movement.
+- Look for: character-defining moments, emotional reveals, stunning visuals described.`,
 
-    educational: `- Find the key insight or "aha" moment — the sentence that makes it click.
-- Start with the question or problem statement, end with the answer.
-- Include the surprising fact or counterintuitive reveal.
-- Keep clips 20-45s — long enough to explain, short enough to not lose attention.
-- Look for: "here's the thing", "actually", "believe it or not", numbered lists.`,
+    educational: `- Find the key insight sentence followed by its explanation.
+- The "aha" moment is usually 2-3 sentences: problem → reveal → implication.
+- Start on the question, end on the answer.
+- Look for: "here's the thing", "actually", "believe it or not", surprising facts.`,
   };
 
-  const prompt = `You are a professional video editor who creates viral clips for YouTube Shorts, Instagram Reels, and TikTok.
+  const prompt = `You are a professional video editor creating viral clips for Shorts, Reels, and TikTok.
 
-CONTENT TYPE DETECTED: ${contentType.toUpperCase()}
-
-VIDEO DURATION: ${Math.round(duration)} seconds
+CONTENT TYPE: ${contentType.toUpperCase()}
+VIDEO DURATION: ${Math.round(duration)}s
 CLIPS TO PICK: ${topN}
-CLIP LENGTH RULE: Each clip must be 15-60 seconds. Never shorter than 10s, never longer than 90s.
 
-## CORE RULES (MANDATORY)
+## CRITICAL RULE — CUT ON COMPLETE SENTENCES
 
-1. **CUT ON COMPLETE WORDS** — Every cut must begin at a word's START timestamp and end at a word's END timestamp. Never cut mid-word.
+Below is the transcript split into SENTENCES. Each line is one complete sentence with its exact start and end timestamp.
 
-2. **CUT ON COMPLETE PHRASES** — Start at the beginning of a sentence or major phrase. End when the thought completes. Never start or end mid-sentence unless the sentence is over 40 seconds long.
+- Your clip's start_seconds MUST be the start time of the FIRST sentence you want to include.
+- Your clip's end_seconds MUST be the end time of the LAST sentence you want to include.
+- NEVER start or end mid-sentence. Never cut a sentence in half.
+- A good clip typically contains 2-5 consecutive sentences that form a complete thought, story, or joke.
+- Include the full context so the viewer understands what's happening.
 
-3. **HOOK IN THE FIRST 3 SECONDS** — The opening 3 seconds must immediately grab attention. If it starts slow, choose a different segment.
-
-4. **NO TAIL DEAD AIR** — End on a strong word, not trailing off, pauses, or silence.
-
-5. **USE THE WORD TIMESTAMPS BELOW** — Your start_seconds and end_seconds MUST match timestamps from the word list. Round to 2 decimal places.
-
-## CONTENT-SPECIFIC GUIDANCE
+## CONTENT-SPECIFIC STRATEGY
 
 ${contentTypeGuides[contentType] || contentTypeGuides.general}
+
+## CLIP QUALITY RULES
+
+- First sentence must hook immediately — if the opening sentence is boring, start later.
+- Last sentence must provide payoff — end when the thought completes, not when it trails off.
+- Ideal length: 15-60 seconds (shorter for pure comedy, longer for stories).
+- The clip must be understandable on its own — someone watching this 20-second clip should get the full context.
 
 ## OUTPUT FORMAT
 
@@ -254,14 +269,14 @@ Return a JSON array of ${topN} clip picks, sorted by score (highest first):
   }
 ]
 
-Rules: score must be an integer. reason max 5 words. Return ONLY the JSON array, no markdown, no surrounding text, no code fences.
+Rules: score must be integer 1-10. reason max 5 words. Return ONLY the JSON array — no markdown, no code fences, no surrounding text.
 
-## TRANSCRIPT WITH WORD TIMESTAMPS
+## TRANSCRIPT — SENTENCE LIST
 
-Full text:
-${transcript}
+${sentenceTranscript}
 
-${tsTranscript}`;
+Full raw text:
+${transcript}`;
 
   const res = await fetch("/api/clips/score", {
     method: "POST",
@@ -279,8 +294,8 @@ ${tsTranscript}`;
 
   const snapped: ClipPick[] = rawClips.map((c) => ({
     ...c,
-    start_seconds: snapStartToWordBoundary(words, c.start_seconds),
-    end_seconds: snapEndToWordBoundary(words, c.end_seconds),
+    start_seconds: snapToSentenceBoundary(sentences, c.start_seconds, "start"),
+    end_seconds: snapToSentenceBoundary(sentences, c.end_seconds, "end"),
   }));
 
   return snapped;
