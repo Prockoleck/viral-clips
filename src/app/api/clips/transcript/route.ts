@@ -1,6 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
 import { extractVideoId, fetchYouTubeTranscript } from "@/lib/youtube";
 
+export const runtime = "edge";
+
 export async function GET(req: NextRequest) {
   try {
     const url = req.nextUrl.searchParams.get("url");

@@ -18,15 +18,53 @@ export function extractVideoId(url: string): string | null {
   return null;
 }
 
+function parseTimestamp(ts: string): number {
+  const parts = ts.split(":").map(Number);
+  if (parts.length === 3) return parts[0] * 3600 + parts[1] * 60 + parts[2];
+  if (parts.length === 2) return parts[0] * 60 + parts[1];
+  return parts[0] || 0;
+}
+
+function parseTranscriptText(raw: string): { text: string; start: number; end: number }[] {
+  const lines = raw.split("\n").filter((l) => l.trim());
+  const entries: { text: string; start: number }[] = [];
+
+  for (const line of lines) {
+    const m = line.match(/^\[(\d+:\d+(?::\d+)?)\]\s*(.+)$/);
+    if (!m) continue;
+    entries.push({ start: parseTimestamp(m[1]), text: m[2].trim() });
+  }
+
+  const deduped: { text: string; start: number }[] = [];
+  for (const entry of entries) {
+    if (deduped.length === 0 || entry.text !== deduped[deduped.length - 1].text) {
+      deduped.push(entry);
+    }
+  }
+
+  const segments: { text: string; start: number; end: number }[] = [];
+  for (let i = 0; i < deduped.length; i++) {
+    const nextStart = i < deduped.length - 1 ? deduped[i + 1].start : deduped[i].start + 5;
+    segments.push({
+      text: deduped[i].text,
+      start: deduped[i].start,
+      end: nextStart,
+    });
+  }
+
+  return segments;
+}
+
 export async function fetchYouTubeTranscript(
   videoId: string
 ): Promise<YouTubeTranscriptResult> {
-  const [rawTranscript, metadata] = await Promise.all([
-    fetchTranscriptClient(videoId),
+  const [rawText, metadata] = await Promise.all([
+    fetchTranscriptViaApi(videoId),
     fetchVideoMetadata(videoId),
   ]);
 
-  if (rawTranscript.length === 0) {
+  const parsed = parseTranscriptText(rawText);
+  if (parsed.length === 0) {
     throw new Error("No captions available for this video");
   }
 
@@ -35,19 +73,16 @@ export async function fetchYouTubeTranscript(
   let currentStart = 0;
   let currentEnd = 0;
 
-  for (const item of rawTranscript) {
-    const text = item.text.trim();
-    if (!text) continue;
-
-    const segStart = item.offset / 1000;
-    const segEnd = (item.offset + item.duration) / 1000;
+  for (const item of parsed) {
+    const text = item.text.replace(/^&gt;&gt;\s*/, "").trim();
+    if (!text || text === "[music]" || text === "[sighs]" || text === "[snorts]" || text.startsWith("[")) continue;
 
     if (currentText === "") {
-      currentStart = segStart;
+      currentStart = item.start;
     }
 
     currentText += (currentText ? " " : "") + text;
-    currentEnd = segEnd;
+    currentEnd = item.end;
 
     if (/[.!?]$/.test(text) || mergedSegments.length >= 30) {
       mergedSegments.push({
@@ -77,158 +112,19 @@ export async function fetchYouTubeTranscript(
   };
 }
 
-const CORS_PROXIES = [
-  (url: string) => `https://api.allorigins.win/raw?url=${encodeURIComponent(url)}`,
-  (url: string) => `https://corsproxy.io/?${encodeURIComponent(url)}`,
-];
-
-async function fetchViaProxy(url: string): Promise<string> {
-  for (const proxyFn of CORS_PROXIES) {
-    try {
-      const proxyUrl = proxyFn(url);
-      const res = await fetch(proxyUrl);
-      if (res.ok) {
-        const text = await res.text();
-        if (text.length > 1000) return text;
-      }
-    } catch {
-      continue;
-    }
-  }
-  throw new Error("All proxies failed");
-}
-
-async function fetchTranscriptClient(
-  videoId: string
-): Promise<{ text: string; duration: number; offset: number }[]> {
-  let lastError: Error | null = null;
-
-  try {
-    const result = await fetchTranscriptViaPage(videoId);
-    if (result.length > 0) return result;
-  } catch (e) {
-    lastError = e instanceof Error ? e : new Error(String(e));
-  }
-
-  try {
-    const result = await fetchTranscriptViaPage(videoId, true);
-    if (result.length > 0) return result;
-  } catch (e) {
-    lastError = e instanceof Error ? e : new Error(String(e));
-  }
-
-  throw lastError || new Error("Failed to fetch transcript");
-}
-
-async function fetchTranscriptViaPage(
-  videoId: string,
-  useProxy = false
-): Promise<{ text: string; duration: number; offset: number }[]> {
-  const watchUrl = `https://www.youtube.com/watch?v=${videoId}&hl=en`;
-  const html = useProxy
-    ? await fetchViaProxy(watchUrl)
-    : await fetch(watchUrl).then((r) => r.text());
-
-  if (html.includes('class="g-recaptcha"')) {
-    throw new Error("YouTube is requiring captcha verification");
-  }
-
-  const captionTracks = extractCaptionTracks(html);
-  if (!captionTracks || captionTracks.length === 0) {
-    throw new Error("No caption tracks found in page");
-  }
-
-  const track = captionTracks[0];
-  const captionUrl = track.baseUrl;
-
-  const xml = useProxy
-    ? await fetchViaProxy(captionUrl)
-    : await fetch(captionUrl).then((r) => r.text());
-
-  return parseTranscriptXml(xml);
-}
-
-function extractCaptionTracks(
-  html: string
-): { baseUrl: string; languageCode: string }[] | null {
-  const m = html.match(/"captionTracks":\s*(\[.*?\])/);
-  if (m) {
-    try {
-      return JSON.parse(m[1]);
-    } catch {}
-  }
-
-  const playerMatch = html.match(
-    /var ytInitialPlayerResponse\s*=\s*(\{[\s\S]*?\});/
+async function fetchTranscriptViaApi(videoId: string): Promise<string> {
+  const res = await fetch(
+    `https://youtube-transcript.ai/transcript/${videoId}.txt`
   );
-  if (playerMatch) {
-    try {
-      const playerData = JSON.parse(playerMatch[1]);
-      const tracks =
-        playerData?.captions?.playerCaptionsTracklistRenderer?.captionTracks;
-      if (Array.isArray(tracks) && tracks.length > 0) {
-        return tracks;
-      }
-    } catch {}
+  if (!res.ok) {
+    throw new Error(`Transcript fetch failed: ${res.status}`);
   }
-
-  return null;
-}
-
-function decodeEntities(text: string): string {
-  return text
-    .replace(/&amp;/g, "&")
-    .replace(/&lt;/g, "<")
-    .replace(/&gt;/g, ">")
-    .replace(/&quot;/g, '"')
-    .replace(/&#39;/g, "'")
-    .replace(/&apos;/g, "'")
-    .replace(/&#x([0-9a-fA-F]+);/g, (_, hex) =>
-      String.fromCodePoint(parseInt(hex, 16))
-    )
-    .replace(/&#(\d+);/g, (_, dec) => String.fromCodePoint(parseInt(dec, 10)));
-}
-
-function parseTranscriptXml(
-  xml: string
-): { text: string; duration: number; offset: number }[] {
-  const results: {
-    text: string;
-    duration: number;
-    offset: number;
-  }[] = [];
-
-  const pRegex =
-    /<p\s+t="(\d+)"\s+d="(\d+)"[^>]*>([\s\S]*?)<\/p>/g;
-  let match;
-  while ((match = pRegex.exec(xml)) !== null) {
-    const startMs = parseInt(match[1], 10);
-    const durMs = parseInt(match[2], 10);
-    const inner = match[3];
-    let text = "";
-    const sRegex = /<s[^>]*>([^<]*)<\/s>/g;
-    let sMatch;
-    while ((sMatch = sRegex.exec(inner)) !== null) {
-      text += sMatch[1];
-    }
-    if (!text) {
-      text = inner.replace(/<[^>]+>/g, "");
-    }
-    text = decodeEntities(text).trim();
-    if (text) {
-      results.push({ text, duration: durMs, offset: startMs });
-    }
+  const text = await res.text();
+  const transcriptStart = text.indexOf("## Transcript");
+  if (transcriptStart === -1) {
+    return text;
   }
-  if (results.length > 0) return results;
-
-  const classicRegex =
-    /<text start="([^"]*)" dur="([^"]*)">([^<]*)<\/text>/g;
-  const classicResults = [...xml.matchAll(classicRegex)];
-  return classicResults.map((r) => ({
-    text: decodeEntities(r[3]),
-    duration: parseFloat(r[2]) * 1000,
-    offset: parseFloat(r[1]) * 1000,
-  }));
+  return text.substring(transcriptStart + "## Transcript".length).trim();
 }
 
 async function fetchVideoMetadata(
