@@ -120,7 +120,7 @@ export async function cutClips(
   for (let i = 0; i < clips.length; i++) {
     const c = clips[i];
     const start = Math.max(0, c.start);
-    const duration = Math.min(c.end - start, 60);
+    const duration = Math.min(c.end - start, 120);
     const outName = `clip_${i + 1}.mp4`;
 
     onProgress?.(
