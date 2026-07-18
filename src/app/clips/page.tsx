@@ -3,7 +3,7 @@
 import { useState, useRef } from "react";
 import { getFFmpeg, extractAudio, chunkAudio, cutClips } from "@/lib/ffmpeg";
 import { transcribeAudio, scoreTranscript } from "@/lib/groq";
-import { extractVideoId, buildYouTubeEmbedUrl } from "@/lib/youtube";
+import { extractVideoId, buildYouTubeEmbedUrl, fetchYouTubeTranscript } from "@/lib/youtube";
 import type { ClipPick } from "@/lib/groq";
 import type { ClipInfo } from "@/lib/ffmpeg";
 
@@ -83,15 +83,7 @@ export default function ClipsPage() {
       setProgressLabel("Fetching transcript...");
       setProgress(20);
 
-      const transcriptRes = await fetch(
-        `/api/clips/transcript?url=${encodeURIComponent(youtubeUrl)}`
-      );
-      if (!transcriptRes.ok) {
-        const err = await transcriptRes.json();
-        throw new Error(err.error || "Failed to fetch transcript");
-      }
-
-      const transcriptData = await transcriptRes.json();
+      const transcriptData = await fetchYouTubeTranscript(videoId);
       setYoutubeTitle(transcriptData.title);
 
       setStep("scoring");

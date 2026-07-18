@@ -1,4 +1,3 @@
-import { YoutubeTranscript } from "youtube-transcript";
 import type { GroqSegment } from "./groq";
 
 export type YouTubeTranscriptResult = {
@@ -19,247 +18,11 @@ export function extractVideoId(url: string): string | null {
   return null;
 }
 
-const INNERTUBE_CLIENTS = [
-  {
-    clientName: "WEB",
-    clientVersion: "2.20250717.00.00",
-    userAgent:
-      "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.0.0 Safari/537.36",
-    apiKey: "AIzaSyAO_FJ2SlqU8Q4STEHLGCilw_Y9_11qcW8",
-    context: {
-      client: {
-        clientName: "WEB",
-        clientVersion: "2.20250717.00.00",
-        hl: "en",
-        gl: "US",
-      },
-    },
-  },
-  {
-    clientName: "MWEB",
-    clientVersion: "2.20250717.00.00",
-    userAgent:
-      "Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.0.0 Mobile Safari/537.36",
-    apiKey: "AIzaSyAO_FJ2SlqU8Q4STEHLGCilw_Y9_11qcW8",
-    context: {
-      client: {
-        clientName: "MWEB",
-        clientVersion: "2.20250717.00.00",
-        hl: "en",
-        gl: "US",
-      },
-    },
-  },
-  {
-    clientName: "TVHTML5_SIMPLY_EMBEDDED_PLAYER",
-    clientVersion: "2.0",
-    userAgent: "Mozilla/5.0",
-    apiKey: "AIzaSyAO_FJ2SlqU8Q4STEHLGCilw_Y9_11qcW8",
-    context: {
-      client: {
-        clientName: "TVHTML5_SIMPLY_EMBEDDED_PLAYER",
-        clientVersion: "2.0",
-        hl: "en",
-        gl: "US",
-      },
-      thirdParty: {
-        embedUrl: "https://www.youtube.com",
-      },
-    },
-  },
-];
-
-async function fetchCaptionTracksViaInnerTube(
-  videoId: string
-): Promise<{ baseUrl: string; languageCode: string }[] | null> {
-  for (const client of INNERTUBE_CLIENTS) {
-    try {
-      const url = `https://www.youtube.com/youtubei/v1/player?key=${client.apiKey}&prettyPrint=false`;
-      const resp = await fetch(url, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "User-Agent": client.userAgent,
-        },
-        body: JSON.stringify({
-          context: client.context,
-          videoId,
-          contentCheckOk: true,
-          racyCheckOk: true,
-        }),
-      });
-      if (!resp.ok) continue;
-      const data = await resp.json();
-      const tracks =
-        data?.captions?.playerCaptionsTracklistRenderer?.captionTracks;
-      if (Array.isArray(tracks) && tracks.length > 0) {
-        return tracks;
-      }
-    } catch {
-      continue;
-    }
-  }
-  return null;
-}
-
-async function fetchCaptionTracksViaPageScrape(
-  videoId: string
-): Promise<{ baseUrl: string; languageCode: string }[] | null> {
-  try {
-    const resp = await fetch(
-      `https://www.youtube.com/watch?v=${videoId}`,
-      {
-        headers: {
-          "User-Agent":
-            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.0.0 Safari/537.36",
-          "Accept-Language": "en-US,en;q=0.9",
-        },
-      }
-    );
-    const html = await resp.text();
-    if (html.includes('class="g-recaptcha"')) return null;
-    const m = html.match(/"captionTracks":\s*(\[.*?\])/);
-    if (m) {
-      return JSON.parse(m[1]);
-    }
-  } catch {
-    // ignore
-  }
-  return null;
-}
-
-async function fetchCaptionTracks(
-  videoId: string
-): Promise<{ baseUrl: string; languageCode: string }[] | null> {
-  const tracks = await fetchCaptionTracksViaInnerTube(videoId);
-  if (tracks && tracks.length > 0) return tracks;
-  return fetchCaptionTracksViaPageScrape(videoId);
-}
-
-function decodeEntities(text: string): string {
-  return text
-    .replace(/&amp;/g, "&")
-    .replace(/&lt;/g, "<")
-    .replace(/&gt;/g, ">")
-    .replace(/&quot;/g, '"')
-    .replace(/&#39;/g, "'")
-    .replace(/&apos;/g, "'")
-    .replace(/&#x([0-9a-fA-F]+);/g, (_, hex) =>
-      String.fromCodePoint(parseInt(hex, 16))
-    )
-    .replace(/&#(\d+);/g, (_, dec) => String.fromCodePoint(parseInt(dec, 10)));
-}
-
-function parseTranscriptXml(xml: string, lang: string) {
-  const results: { text: string; duration: number; offset: number; lang: string }[] = [];
-
-  const pRegex = /<p\s+t="(\d+)"\s+d="(\d+)"[^>]*>([\s\S]*?)<\/p>/g;
-  let match;
-  while ((match = pRegex.exec(xml)) !== null) {
-    const startMs = parseInt(match[1], 10);
-    const durMs = parseInt(match[2], 10);
-    const inner = match[3];
-    let text = "";
-    const sRegex = /<s[^>]*>([^<]*)<\/s>/g;
-    let sMatch;
-    while ((sMatch = sRegex.exec(inner)) !== null) {
-      text += sMatch[1];
-    }
-    if (!text) {
-      text = inner.replace(/<[^>]+>/g, "");
-    }
-    text = decodeEntities(text).trim();
-    if (text) {
-      results.push({ text, duration: durMs, offset: startMs, lang });
-    }
-  }
-  if (results.length > 0) return results;
-
-  const classicRegex =
-    /<text start="([^"]*)" dur="([^"]*)">([^<]*)<\/text>/g;
-  const classicResults = [...xml.matchAll(classicRegex)];
-  return classicResults.map((r) => ({
-    text: decodeEntities(r[3]),
-    duration: parseFloat(r[2]) * 1000,
-    offset: parseFloat(r[1]) * 1000,
-    lang,
-  }));
-}
-
-async function fetchTranscriptText(
-  baseUrl: string,
-  lang: string
-): Promise<{ text: string; duration: number; offset: number; lang: string }[]> {
-  const url = new URL(baseUrl);
-  if (!url.hostname.endsWith("youtube.com")) {
-    throw new Error("Invalid caption URL");
-  }
-
-  const resp = await fetch(baseUrl, {
-    headers: {
-      "User-Agent":
-        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.0.0 Safari/537.36",
-    },
-  });
-  if (!resp.ok) {
-    throw new Error(`Caption fetch failed: ${resp.status}`);
-  }
-  const xml = await resp.text();
-  return parseTranscriptXml(xml, lang);
-}
-
-async function fetchTranscriptDirectly(
-  videoId: string
-): Promise<{ text: string; duration: number; offset: number; lang: string }[]> {
-  const tracks = await fetchCaptionTracks(videoId);
-  if (!tracks || tracks.length === 0) {
-    throw new Error("No caption tracks found");
-  }
-  const track = tracks[0];
-  return fetchTranscriptText(track.baseUrl, track.languageCode);
-}
-
-async function fetchTranscriptViaLibrary(
-  videoId: string
-): Promise<{ text: string; duration: number; offset: number; lang: string }[]> {
-  const items = await YoutubeTranscript.fetchTranscript(videoId);
-  return items.map((item) => ({
-    text: item.text,
-    duration: item.duration,
-    offset: item.offset,
-    lang: item.lang ?? "en",
-  }));
-}
-
-async function fetchTranscriptSmart(
-  videoId: string
-): Promise<{ text: string; duration: number; offset: number; lang: string }[]> {
-  let lastError: Error | null = null;
-
-  try {
-    const result = await fetchTranscriptDirectly(videoId);
-    if (result.length > 0) return result;
-  } catch (e) {
-    lastError = e instanceof Error ? e : new Error(String(e));
-  }
-
-  try {
-    const result = await fetchTranscriptViaLibrary(videoId);
-    if (result.length > 0) return result;
-  } catch (e) {
-    lastError = e instanceof Error ? e : new Error(String(e));
-  }
-
-  throw lastError || new Error("Failed to fetch transcript");
-}
-
 export async function fetchYouTubeTranscript(
   videoId: string
 ): Promise<YouTubeTranscriptResult> {
   const [rawTranscript, metadata] = await Promise.all([
-    fetchTranscriptSmart(videoId).catch((e) => {
-      throw e;
-    }),
+    fetchTranscriptClient(videoId),
     fetchVideoMetadata(videoId),
   ]);
 
@@ -312,6 +75,160 @@ export async function fetchYouTubeTranscript(
     title: metadata.title,
     thumbnail: metadata.thumbnail,
   };
+}
+
+const CORS_PROXIES = [
+  (url: string) => `https://api.allorigins.win/raw?url=${encodeURIComponent(url)}`,
+  (url: string) => `https://corsproxy.io/?${encodeURIComponent(url)}`,
+];
+
+async function fetchViaProxy(url: string): Promise<string> {
+  for (const proxyFn of CORS_PROXIES) {
+    try {
+      const proxyUrl = proxyFn(url);
+      const res = await fetch(proxyUrl);
+      if (res.ok) {
+        const text = await res.text();
+        if (text.length > 1000) return text;
+      }
+    } catch {
+      continue;
+    }
+  }
+  throw new Error("All proxies failed");
+}
+
+async function fetchTranscriptClient(
+  videoId: string
+): Promise<{ text: string; duration: number; offset: number }[]> {
+  let lastError: Error | null = null;
+
+  try {
+    const result = await fetchTranscriptViaPage(videoId);
+    if (result.length > 0) return result;
+  } catch (e) {
+    lastError = e instanceof Error ? e : new Error(String(e));
+  }
+
+  try {
+    const result = await fetchTranscriptViaPage(videoId, true);
+    if (result.length > 0) return result;
+  } catch (e) {
+    lastError = e instanceof Error ? e : new Error(String(e));
+  }
+
+  throw lastError || new Error("Failed to fetch transcript");
+}
+
+async function fetchTranscriptViaPage(
+  videoId: string,
+  useProxy = false
+): Promise<{ text: string; duration: number; offset: number }[]> {
+  const watchUrl = `https://www.youtube.com/watch?v=${videoId}&hl=en`;
+  const html = useProxy
+    ? await fetchViaProxy(watchUrl)
+    : await fetch(watchUrl).then((r) => r.text());
+
+  if (html.includes('class="g-recaptcha"')) {
+    throw new Error("YouTube is requiring captcha verification");
+  }
+
+  const captionTracks = extractCaptionTracks(html);
+  if (!captionTracks || captionTracks.length === 0) {
+    throw new Error("No caption tracks found in page");
+  }
+
+  const track = captionTracks[0];
+  const captionUrl = track.baseUrl;
+
+  const xml = useProxy
+    ? await fetchViaProxy(captionUrl)
+    : await fetch(captionUrl).then((r) => r.text());
+
+  return parseTranscriptXml(xml);
+}
+
+function extractCaptionTracks(
+  html: string
+): { baseUrl: string; languageCode: string }[] | null {
+  const m = html.match(/"captionTracks":\s*(\[.*?\])/);
+  if (m) {
+    try {
+      return JSON.parse(m[1]);
+    } catch {}
+  }
+
+  const playerMatch = html.match(
+    /var ytInitialPlayerResponse\s*=\s*(\{[\s\S]*?\});/
+  );
+  if (playerMatch) {
+    try {
+      const playerData = JSON.parse(playerMatch[1]);
+      const tracks =
+        playerData?.captions?.playerCaptionsTracklistRenderer?.captionTracks;
+      if (Array.isArray(tracks) && tracks.length > 0) {
+        return tracks;
+      }
+    } catch {}
+  }
+
+  return null;
+}
+
+function decodeEntities(text: string): string {
+  return text
+    .replace(/&amp;/g, "&")
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;/g, "'")
+    .replace(/&apos;/g, "'")
+    .replace(/&#x([0-9a-fA-F]+);/g, (_, hex) =>
+      String.fromCodePoint(parseInt(hex, 16))
+    )
+    .replace(/&#(\d+);/g, (_, dec) => String.fromCodePoint(parseInt(dec, 10)));
+}
+
+function parseTranscriptXml(
+  xml: string
+): { text: string; duration: number; offset: number }[] {
+  const results: {
+    text: string;
+    duration: number;
+    offset: number;
+  }[] = [];
+
+  const pRegex =
+    /<p\s+t="(\d+)"\s+d="(\d+)"[^>]*>([\s\S]*?)<\/p>/g;
+  let match;
+  while ((match = pRegex.exec(xml)) !== null) {
+    const startMs = parseInt(match[1], 10);
+    const durMs = parseInt(match[2], 10);
+    const inner = match[3];
+    let text = "";
+    const sRegex = /<s[^>]*>([^<]*)<\/s>/g;
+    let sMatch;
+    while ((sMatch = sRegex.exec(inner)) !== null) {
+      text += sMatch[1];
+    }
+    if (!text) {
+      text = inner.replace(/<[^>]+>/g, "");
+    }
+    text = decodeEntities(text).trim();
+    if (text) {
+      results.push({ text, duration: durMs, offset: startMs });
+    }
+  }
+  if (results.length > 0) return results;
+
+  const classicRegex =
+    /<text start="([^"]*)" dur="([^"]*)">([^<]*)<\/text>/g;
+  const classicResults = [...xml.matchAll(classicRegex)];
+  return classicResults.map((r) => ({
+    text: decodeEntities(r[3]),
+    duration: parseFloat(r[2]) * 1000,
+    offset: parseFloat(r[1]) * 1000,
+  }));
 }
 
 async function fetchVideoMetadata(
