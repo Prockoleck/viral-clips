@@ -213,20 +213,20 @@ export async function scoreTranscript(
   const allSentences = splitSegmentsIntoSentences(segments);
   const contentType = autoDetectContentType(transcript);
 
-  const MAX_SENTENCES = 2000;
+  const MAX_SENTENCES = 800;
   const sentences = allSentences.length > MAX_SENTENCES
     ? sampleSentences(allSentences, MAX_SENTENCES, duration)
     : allSentences;
 
   const sentenceTranscript = buildSentenceTranscript(sentences);
 
-  const maxPromptChars = 90000;
+  const maxPromptChars = 30000;
   const truncatedSentenceTranscript = sentenceTranscript.length > maxPromptChars
     ? sentenceTranscript.substring(0, maxPromptChars) + "\n\n[TRANSCRIPT TRUNCATED — analyze the available portion]"
     : sentenceTranscript;
 
-  const truncatedTranscript = transcript.length > 30000
-    ? transcript.substring(0, 30000) + "..."
+  const truncatedTranscript = transcript.length > 15000
+    ? transcript.substring(0, 15000) + "..."
     : transcript;
 
   const contentTypeGuides: Record<string, string> = {
