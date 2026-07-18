@@ -139,26 +139,26 @@ function autoDetectContentType(transcript: string): string {
   return "general";
 }
 
-function snapToSentenceBoundary(sentences: GroqSentence[], targetSeconds: number, side: "start" | "end"): number {
-  if (sentences.length === 0) return targetSeconds;
+function snapToSegmentBoundary(segs: { start: number; end: number }[], targetSeconds: number, side: "start" | "end"): number {
+  if (segs.length === 0) return targetSeconds;
 
   if (side === "start") {
-    let best = sentences[0].start;
-    for (const s of sentences) {
+    let best = segs[0].start;
+    for (const s of segs) {
       if (s.start <= targetSeconds + 0.5) best = s.start;
     }
     return best;
   } else {
-    let best = sentences[sentences.length - 1].end;
-    for (const s of sentences) {
+    let best = segs[segs.length - 1].end;
+    for (const s of segs) {
       if (s.end >= targetSeconds - 0.3 && s.end <= targetSeconds + 1) {
         best = s.end;
         return best;
       }
     }
-    let nearest = sentences[0].end;
+    let nearest = segs[0].end;
     let minDist = Infinity;
-    for (const s of sentences) {
+    for (const s of segs) {
       const dist = Math.abs(s.end - targetSeconds);
       if (dist < minDist) {
         minDist = dist;
@@ -210,22 +210,32 @@ export async function scoreTranscript(
   duration: number,
   topN: number
 ): Promise<ClipPick[]> {
-  const allSentences = splitSegmentsIntoSentences(segments);
   const contentType = autoDetectContentType(transcript);
 
-  const MAX_SENTENCES = 500;
-  const sentences = allSentences.length > MAX_SENTENCES
-    ? sampleSentences(allSentences, MAX_SENTENCES, duration)
-    : allSentences;
+  const filteredSegs = segments.filter(
+    (s) => s.text.trim().length > 5 && !/^\[/.test(s.text.trim())
+  );
 
-  const sentenceTranscript = buildSentenceTranscript(sentences);
+  const MAX_SEGS = 300;
+  const segs = filteredSegs.length > MAX_SEGS
+    ? (() => {
+        const step = filteredSegs.length / MAX_SEGS;
+        const sampled: GroqSegment[] = [];
+        for (let i = 0; i < MAX_SEGS; i++) {
+          sampled.push(filteredSegs[Math.floor(i * step)]);
+        }
+        return sampled.sort((a, b) => a.start - b.start);
+      })()
+    : filteredSegs;
 
-  const maxPromptChars = 24000;
-  const truncatedSentenceTranscript = sentenceTranscript.length > maxPromptChars
-    ? sentenceTranscript.substring(0, maxPromptChars) + "\n\n[TRUNCATED]"
-    : sentenceTranscript;
+  const segTranscript = segs
+    .map((s, i) => `BLOCK ${i + 1} [${s.start.toFixed(0)}s-${s.end.toFixed(0)}s]: ${s.text}`)
+    .join("\n");
 
-  const truncatedTranscript = "";
+  const maxChars = 20000;
+  const truncated = segTranscript.length > maxChars
+    ? segTranscript.substring(0, maxChars) + "\n\n[TRUNCATED]"
+    : segTranscript;
 
 
   const contentTypeGuides: Record<string, string> = {
@@ -245,16 +255,23 @@ export async function scoreTranscript(
   const prompt = `You're a video editor finding viral clips for Shorts/Reels/TikTok.
 
 CONTENT: ${contentType.toUpperCase()} | ${Math.round(duration)}s | Pick ${topN} clips
-RULE: Cut on sentence boundaries. Each line = timestamp + text. Start=first sentence start, End=last sentence end.
-VARY: Mix small (1-3 sent, 5-15s), medium (3-10 sent, 15-45s), large (10+ sent, 45-120s).
-QUALITY: Self-contained, hook first, complete feeling. Best moments only.
+
+Each BLOCK below has a time range and text. A clip spans multiple consecutive blocks.
+- Pick a START block and END block for each clip.
+- start_seconds = START block's start time
+- end_seconds = END block's end time
+- CLIPS SHOULD BE 15-120 seconds. Don't pick clips under 15 seconds.
+- Mix sizes: some 15-30s, some 30-60s, some 60-120s.
+- Self-contained: viewer gets the full point without context.
+- Hook first sentence, complete ending.
+
 ${contentTypeGuides[contentType] || contentTypeGuides.general}
 
-SENTENCES:
-${truncatedSentenceTranscript}
+BLOCKS:
+${truncated}
 
 Return JSON array: [{"start_seconds":num,"end_seconds":num,"score":1-10,"reason":"2-5 words"}]
-score=10 is most viral. Return ONLY the JSON array.`;
+score=10 most viral. Return ONLY JSON array.`;
 
   const res = await fetch("/api/clips/score", {
     method: "POST",
@@ -272,8 +289,8 @@ score=10 is most viral. Return ONLY the JSON array.`;
 
   const snapped: ClipPick[] = rawClips.map((c) => ({
     ...c,
-    start_seconds: snapToSentenceBoundary(sentences, c.start_seconds, "start"),
-    end_seconds: snapToSentenceBoundary(sentences, c.end_seconds, "end"),
+    start_seconds: snapToSegmentBoundary(segs, c.start_seconds, "start"),
+    end_seconds: snapToSegmentBoundary(segs, c.end_seconds, "end"),
   }));
 
   return snapped;
