@@ -1,0 +1,326 @@
+"use client";
+
+import { useState, useRef } from "react";
+import { getFFmpeg, extractAudio, chunkAudio, cutClips } from "@/lib/ffmpeg";
+import { transcribeAudio, scoreTranscript } from "@/lib/groq";
+import type { ClipPick } from "@/lib/groq";
+import type { ClipInfo } from "@/lib/ffmpeg";
+
+type Step =
+  | "idle"
+  | "loading-ffmpeg"
+  | "extracting"
+  | "transcribing"
+  | "scoring"
+  | "cutting"
+  | "done"
+  | "error";
+
+const MAX_FILE_SIZE = 500 * 1024 * 1024;
+
+export default function ClipsPage() {
+  const [file, setFile] = useState<File | null>(null);
+  const [topN, setTopN] = useState(5);
+  const [step, setStep] = useState<Step>("idle");
+  const [progress, setProgress] = useState(0);
+  const [progressLabel, setProgressLabel] = useState("");
+  const [error, setError] = useState("");
+  const [clips, setClips] = useState<{ blob: Blob; filename: string; clip: ClipInfo }[]>([]);
+  const [clipUrls, setClipUrls] = useState<string[]>([]);
+  const fileRef = useRef<HTMLInputElement>(null);
+
+  function handleFileChange(e: React.ChangeEvent<HTMLInputElement>) {
+    const f = e.target.files?.[0];
+    if (!f) return;
+    if (f.size > MAX_FILE_SIZE) {
+      setError("File too large. Max 500MB.");
+      return;
+    }
+    setFile(f);
+    setError("");
+    setClips([]);
+    setClipUrls([]);
+    setStep("idle");
+  }
+
+  function handleProgress(pct: number, label: string) {
+    setProgress(pct);
+    setProgressLabel(label);
+  }
+
+  async function handleProcess() {
+    if (!file) return;
+
+    setError("");
+    setClips([]);
+    setClipUrls([]);
+
+    try {
+      setStep("loading-ffmpeg");
+      setProgressLabel("Loading FFmpeg engine (~31 MB)...");
+      setProgress(0);
+      await getFFmpeg();
+
+      setStep("extracting");
+      setProgressLabel("Extracting audio...");
+      const audioBlob = await extractAudio(file, handleProgress);
+
+      const videoDuration = await getVideoDuration(file);
+
+      setStep("transcribing");
+      setProgressLabel("Transcribing audio with Groq Whisper...");
+      setProgress(0);
+
+      const chunks = await chunkAudio(audioBlob, videoDuration, handleProgress);
+      let allWords: { text: string; start: number; end: number }[] = [];
+
+      for (let i = 0; i < chunks.length; i++) {
+        setProgressLabel(`Transcribing chunk ${i + 1}/${chunks.length}...`);
+        const result = await transcribeAudio(chunks[i].chunk, chunks[i].offset);
+        allWords = allWords.concat(result.words);
+      }
+
+      const fullTranscript = allWords.map((w) => w.text).join(" ");
+
+      setStep("scoring");
+      setProgressLabel("Analyzing for viral moments...");
+      setProgress(30);
+      const picks = await scoreTranscript(fullTranscript, allWords, videoDuration, topN);
+
+      if (!picks.length) {
+        setError("No viral moments detected in this video.");
+        setStep("error");
+        return;
+      }
+
+      setStep("cutting");
+      setProgressLabel("Cutting clips...");
+      setProgress(0);
+      const clipInfo: ClipInfo[] = picks.map((p) => ({
+        start: p.start_seconds,
+        end: p.end_seconds,
+        score: p.score,
+        reason: p.reason,
+      }));
+      const clipResults = await cutClips(file, clipInfo, handleProgress);
+
+      setClips(clipResults);
+      const urls = clipResults.map((r) => URL.createObjectURL(r.blob));
+      setClipUrls(urls);
+      setStep("done");
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : "Unknown error";
+      setError(msg);
+      setStep("error");
+    }
+  }
+
+  function getVideoDuration(file: File): Promise<number> {
+    return new Promise((resolve, reject) => {
+      const video = document.createElement("video");
+      video.preload = "metadata";
+      video.onloadedmetadata = () => {
+        URL.revokeObjectURL(video.src);
+        resolve(video.duration);
+      };
+      video.onerror = () => reject(new Error("Could not read video duration"));
+      video.src = URL.createObjectURL(file);
+    });
+  }
+
+  const barStyle = (pct: number) => ({
+    height: 6,
+    borderRadius: 3,
+    background: "#e0e0e0",
+    overflow: "hidden" as const,
+    marginTop: 8,
+  });
+
+  const fillStyle = (pct: number) => ({
+    height: "100%",
+    width: `${pct}%`,
+    background: "#f97316",
+    borderRadius: 3,
+    transition: "width 0.3s ease",
+  });
+
+  return (
+    <main style={{ maxWidth: 720, margin: "0 auto", padding: "40px 24px" }}>
+      <h1 style={{ fontSize: "2rem", fontWeight: 700, margin: 0, textAlign: "center" }}>Viral Clips</h1>
+      <p style={{ color: "#666", textAlign: "center", marginTop: 4, marginBottom: 32 }}>
+        Upload a video. AI finds & cuts the best moments. All in your browser.
+      </p>
+
+      <div style={{
+        background: "#fff",
+        border: "1px solid #e0e0e0",
+        borderRadius: 16,
+        padding: 32,
+        maxWidth: 500,
+        margin: "0 auto",
+      }}>
+        <input
+          ref={fileRef}
+          type="file"
+          accept="video/mp4,video/webm,video/quicktime,video/x-matroska,video/*"
+          onChange={handleFileChange}
+          style={{ width: "100%", fontSize: "0.9rem" }}
+          disabled={step !== "idle" && step !== "done" && step !== "error"}
+        />
+
+        {file && (
+          <div style={{ marginTop: 8, fontSize: "0.8rem", color: "#999" }}>
+            {(file.size / 1024 / 1024).toFixed(1)} MB · {file.name}
+          </div>
+        )}
+
+        <div style={{ marginTop: 20 }}>
+          <label style={{ display: "block", fontSize: "0.9rem", fontWeight: 600, marginBottom: 6 }}>
+            Clips: {topN}
+          </label>
+          <input
+            type="range"
+            min={1}
+            max={10}
+            value={topN}
+            onChange={(e) => setTopN(Number(e.target.value))}
+            style={{ width: "100%" }}
+            disabled={step !== "idle" && step !== "done" && step !== "error"}
+          />
+        </div>
+
+        <button
+          onClick={handleProcess}
+          disabled={!file || (step !== "idle" && step !== "done" && step !== "error")}
+          style={{
+            marginTop: 20,
+            width: "100%",
+            padding: "12px 24px",
+            borderRadius: 10,
+            border: 0,
+            background: !file ? "#ccc" : "#f97316",
+            color: "#fff",
+            fontWeight: 600,
+            fontSize: "1rem",
+            cursor: !file ? "not-allowed" : "pointer",
+          }}
+        >
+          {step === "idle" || step === "done" || step === "error"
+            ? "Extract Clips"
+            : "Processing..."}
+        </button>
+      </div>
+
+      {/* Progress */}
+      {step !== "idle" && step !== "done" && step !== "error" && (
+        <div style={{ maxWidth: 500, margin: "24px auto 0" }}>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+            <span style={{ fontSize: "0.85rem", color: "#666" }}>
+              {stepLabel(step)}
+            </span>
+            <span style={{ fontSize: "0.8rem", color: "#999" }}>{progress}%</span>
+          </div>
+          <div style={barStyle(progress)}>
+            <div style={fillStyle(progress)} />
+          </div>
+          <p style={{ fontSize: "0.8rem", color: "#999", marginTop: 4 }}>{progressLabel}</p>
+        </div>
+      )}
+
+      {step === "done" && (
+        <p style={{ textAlign: "center", fontSize: "0.85rem", color: "#666", marginTop: 12 }}>
+          {clips.length} clips generated
+        </p>
+      )}
+
+      {/* Error */}
+      {error && (
+        <div style={{
+          marginTop: 16,
+          padding: 16,
+          background: "#fef2f2",
+          border: "1px solid #fecaca",
+          borderRadius: 12,
+          color: "#dc2626",
+          textAlign: "center",
+          maxWidth: 500,
+          marginLeft: "auto",
+          marginRight: "auto",
+          fontSize: "0.9rem",
+        }}>
+          {error}
+        </div>
+      )}
+
+      {/* Clips */}
+      {clips.length > 0 && (
+        <div style={{ marginTop: 32, display: "flex", flexDirection: "column", gap: 20, maxWidth: 500, marginLeft: "auto", marginRight: "auto" }}>
+          {clips.map((item, i) => (
+            <div
+              key={i}
+              style={{
+                background: "#fff",
+                border: "1px solid #e0e0e0",
+                borderRadius: 12,
+                padding: 16,
+                display: "flex",
+                flexDirection: "column",
+                gap: 12,
+              }}
+            >
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                <span style={{ fontWeight: 600, fontSize: "0.9rem" }}>Clip #{i + 1}</span>
+                <span style={{
+                  fontSize: "0.8rem",
+                  color: "#f97316",
+                  background: "#fff7ed",
+                  padding: "2px 10px",
+                  borderRadius: 20,
+                }}>
+                  Score: {item.clip.score}
+                </span>
+              </div>
+
+              <div style={{ fontSize: "0.8rem", color: "#999", display: "flex", gap: 16 }}>
+                <span>{item.clip.start}s → {item.clip.end}s</span>
+                <span>{(item.blob.size / 1024 / 1024).toFixed(1)} MB</span>
+              </div>
+
+              {item.clip.reason && (
+                <div style={{ fontSize: "0.85rem", color: "#666", fontStyle: "italic" }}>
+                  {item.clip.reason}
+                </div>
+              )}
+
+              <video
+                src={clipUrls[i]}
+                controls
+                preload="metadata"
+                style={{ width: "100%", borderRadius: 8, background: "#000", maxHeight: 400 }}
+              />
+
+              <a
+                href={clipUrls[i]}
+                download={item.filename}
+                style={{ fontSize: "0.9rem", color: "#f97316", textDecoration: "none", fontWeight: 500 }}
+              >
+                Download clip
+              </a>
+            </div>
+          ))}
+        </div>
+      )}
+    </main>
+  );
+}
+
+function stepLabel(step: Step): string {
+  switch (step) {
+    case "loading-ffmpeg": return "Loading FFmpeg";
+    case "extracting": return "Extracting audio";
+    case "transcribing": return "Transcribing";
+    case "scoring": return "Scoring";
+    case "cutting": return "Cutting clips";
+    default: return "";
+  }
+}
