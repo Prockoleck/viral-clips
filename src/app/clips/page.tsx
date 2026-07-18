@@ -3,7 +3,8 @@
 import { useState, useRef } from "react";
 import { getFFmpeg, extractAudio, chunkAudio, cutClips } from "@/lib/ffmpeg";
 import { transcribeAudio, scoreTranscript } from "@/lib/groq";
-import { extractVideoId, buildYouTubeEmbedUrl, fetchYouTubeTranscript } from "@/lib/youtube";
+import { extractVideoId, fetchYouTubeTranscript } from "@/lib/youtube";
+import YouTubeClipPlayer from "@/components/YouTubeClipPlayer";
 import type { ClipPick } from "@/lib/groq";
 import type { ClipInfo } from "@/lib/ffmpeg";
 
@@ -471,11 +472,10 @@ export default function ClipsPage() {
               )}
 
               <div style={{ position: "relative", paddingBottom: "56.25%", height: 0, borderRadius: 8, overflow: "hidden", background: "#000" }}>
-                <iframe
-                  src={buildYouTubeEmbedUrl(youtubeVideoId, clip.start_seconds, clip.end_seconds)}
-                  style={{ position: "absolute", top: 0, left: 0, width: "100%", height: "100%", border: 0 }}
-                  allow="autoplay; encrypted-media"
-                  allowFullScreen
+                <YouTubeClipPlayer
+                  videoId={youtubeVideoId}
+                  start={clip.start_seconds}
+                  end={clip.end_seconds}
                 />
               </div>
 
