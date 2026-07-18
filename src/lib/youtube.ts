@@ -25,6 +25,22 @@ function parseTimestamp(ts: string): number {
   return parts[0] || 0;
 }
 
+function dedupeTriplicatedText(text: string): string {
+  const words = text.split(/\s+/);
+  if (words.length < 6) return text;
+
+  for (let unitLen = 1; unitLen <= Math.floor(words.length / 3); unitLen++) {
+    const unit = words.slice(0, unitLen).join(" ").toLowerCase();
+    let allMatch = true;
+    for (let rep = 1; rep < 3; rep++) {
+      const candidate = words.slice(rep * unitLen, (rep + 1) * unitLen).join(" ").toLowerCase();
+      if (candidate !== unit) { allMatch = false; break; }
+    }
+    if (allMatch) return words.slice(0, unitLen).join(" ");
+  }
+  return text;
+}
+
 function parseTranscriptText(raw: string): { text: string; start: number; end: number }[] {
   const lines = raw.split("\n").filter((l) => l.trim());
   const entries: { text: string; start: number }[] = [];
@@ -32,7 +48,7 @@ function parseTranscriptText(raw: string): { text: string; start: number; end: n
   for (const line of lines) {
     const m = line.match(/^\[(\d+:\d+(?::\d+)?)\]\s*(.+)$/);
     if (!m) continue;
-    entries.push({ start: parseTimestamp(m[1]), text: m[2].trim() });
+    entries.push({ start: parseTimestamp(m[1]), text: dedupeTriplicatedText(m[2].trim()) });
   }
 
   const deduped: { text: string; start: number }[] = [];
