@@ -248,12 +248,17 @@ Cut on complete sentences. Every sentence below has a timestamp. Your clip start
 
 That's the only hard rule. Everything below is just advice.
 
-## WHAT MAKES A GOOD CLIP
+## VARY THE CLIP SIZES — SMALL, MEDIUM, LARGE
 
-- A viewer should get it without watching anything else. The clip needs to be self-contained — setup and payoff in one package.
-- The first sentence has to hook. If the first sentence is boring, start later. If the last sentence trails off, end earlier or extend to where the thought actually completes.
-- Length doesn't matter. A 10-second joke is fine. A 90-second story is fine. What matters is: does the clip feel complete? If you stop watching and feel like you missed the point, it's too short. If you stop watching because it dragged on, it's too long.
-- Pick the BEST moments, not the ones that fit a specific length. Of all the interesting things said in this video, which ${topN} are the most share-worthy? Those are your clips.
+Don't make all clips the same length. Think in three sizes, each matching the content it captures:
+
+**SMALL clip (1-3 sentences, ~5-15 seconds):** A quick punchline. A one-liner reaction. A single surprising fact. A short "wait what" moment. These hit fast and end quick.
+
+**MEDIUM clip (3-10 sentences, ~15-45 seconds):** A full joke with setup + punchline + reaction. One complete story beat. A key insight with explanation. A short back-and-forth exchange. Most clips should be this size.
+
+**LARGE clip (10+ sentences, ~45-120 seconds):** A whole story arc from start to finish. An emotional journey. A deep dive into one topic. A conversation where people go back and forth multiple times. Only use this for content that genuinely needs the space — a great storyteller telling a complete story, a heated debate, a detailed explanation.
+
+Pick a mix of sizes in your ${topN} clips. If you pick 5 clips, maybe 2 small + 2 medium + 1 large. Or 1 small + 3 medium + 1 large. Let the content decide.
 
 ## HOW TO READ THE TRANSCRIPT BELOW
 
@@ -265,6 +270,13 @@ If you want a clip from sentence 3 to sentence 8:
 - end_seconds = sentence 8's end time
 
 Simple. Just pick which sentences belong in the clip.
+
+## WHAT MAKES A GOOD CLIP
+
+- A viewer should get it without watching anything else. The clip needs to be self-contained — setup and payoff in one package.
+- The first sentence has to hook. If the first sentence is boring, start later. If the last sentence trails off, end earlier or extend to where the thought actually completes.
+- A 10-second joke is fine. A 90-second story is fine. What matters is: does the clip feel complete? If you stop watching and feel like you missed the point, it's too short. If you stop watching because it dragged on, it's too long.
+- Pick the BEST moments, not the ones that fit a specific length. Of all the interesting things said in this video, which ${topN} are the most share-worthy? Those are your clips.
 
 ## YOUR STRATEGY FOR THIS TYPE OF CONTENT
 
