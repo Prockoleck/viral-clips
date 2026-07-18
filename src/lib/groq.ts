@@ -93,6 +93,19 @@ function splitSegmentsIntoSentences(segments: GroqSegment[]): GroqSentence[] {
   return sentences;
 }
 
+function sampleSentences(sentences: GroqSentence[], maxCount: number, duration: number): GroqSentence[] {
+  if (sentences.length <= maxCount) return sentences;
+
+  const step = sentences.length / maxCount;
+  const sampled: GroqSentence[] = [];
+  for (let i = 0; i < maxCount; i++) {
+    sampled.push(sentences[Math.floor(i * step)]);
+  }
+
+  sampled.sort((a, b) => a.start - b.start);
+  return sampled;
+}
+
 function buildSentenceTranscript(sentences: GroqSentence[]): string {
   if (sentences.length === 0) return "";
   return sentences
@@ -197,9 +210,24 @@ export async function scoreTranscript(
   duration: number,
   topN: number
 ): Promise<ClipPick[]> {
-  const sentences = splitSegmentsIntoSentences(segments);
+  const allSentences = splitSegmentsIntoSentences(segments);
   const contentType = autoDetectContentType(transcript);
+
+  const MAX_SENTENCES = 2000;
+  const sentences = allSentences.length > MAX_SENTENCES
+    ? sampleSentences(allSentences, MAX_SENTENCES, duration)
+    : allSentences;
+
   const sentenceTranscript = buildSentenceTranscript(sentences);
+
+  const maxPromptChars = 90000;
+  const truncatedSentenceTranscript = sentenceTranscript.length > maxPromptChars
+    ? sentenceTranscript.substring(0, maxPromptChars) + "\n\n[TRANSCRIPT TRUNCATED — analyze the available portion]"
+    : sentenceTranscript;
+
+  const truncatedTranscript = transcript.length > 30000
+    ? transcript.substring(0, 30000) + "..."
+    : transcript;
 
   const contentTypeGuides: Record<string, string> = {
     general: `You're looking for moments that make a viewer stop scrolling.
@@ -296,10 +324,10 @@ Return a JSON array of ${topN} clips, best ones first:
 
 ## THE TRANSCRIPT — SENTENCES WITH TIMESTAMPS
 
-${sentenceTranscript}
+${truncatedSentenceTranscript}
 
 Full text:
-${transcript}`;
+${truncatedTranscript}`;
 
   const res = await fetch("/api/clips/score", {
     method: "POST",
