@@ -100,7 +100,7 @@ export async function fetchYouTubeTranscript(
     currentText += (currentText ? " " : "") + text;
     currentEnd = item.end;
 
-    if (/[.!?]$/.test(text) || mergedSegments.length >= 30) {
+    if (currentText.split(/\s+/).length >= 60 || mergedSegments.length >= 100) {
       mergedSegments.push({
         start: Math.round(currentStart * 100) / 100,
         end: Math.round(currentEnd * 100) / 100,
