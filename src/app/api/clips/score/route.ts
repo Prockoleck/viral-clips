@@ -14,17 +14,21 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: "No prompt provided" }, { status: 400 });
     }
 
+    const bodyStr = JSON.stringify({
+        model: model || "llama-3.3-70b-versatile",
+        messages: [{ role: "user", content: prompt }],
+        temperature: 0.3,
+        max_tokens: 2048,
+      });
+    console.log(`[score] Prompt length: ${prompt.length} chars, body: ${bodyStr.length} bytes`);
+
     const res = await fetch(`${GROQ_BASE}/chat/completions`, {
       method: "POST",
       headers: {
         Authorization: `Bearer ${apiKey}`,
         "Content-Type": "application/json",
       },
-      body: JSON.stringify({
-        model: model || "llama-3.3-70b-versatile",
-        messages: [{ role: "user", content: prompt }],
-        temperature: 0.3,
-      }),
+      body: bodyStr,
     });
 
     if (!res.ok) {

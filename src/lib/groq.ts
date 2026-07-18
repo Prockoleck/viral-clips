@@ -213,121 +213,48 @@ export async function scoreTranscript(
   const allSentences = splitSegmentsIntoSentences(segments);
   const contentType = autoDetectContentType(transcript);
 
-  const MAX_SENTENCES = 800;
+  const MAX_SENTENCES = 250;
   const sentences = allSentences.length > MAX_SENTENCES
     ? sampleSentences(allSentences, MAX_SENTENCES, duration)
     : allSentences;
 
   const sentenceTranscript = buildSentenceTranscript(sentences);
 
-  const maxPromptChars = 30000;
+  const maxPromptChars = 12000;
   const truncatedSentenceTranscript = sentenceTranscript.length > maxPromptChars
-    ? sentenceTranscript.substring(0, maxPromptChars) + "\n\n[TRANSCRIPT TRUNCATED — analyze the available portion]"
+    ? sentenceTranscript.substring(0, maxPromptChars) + "\n\n[TRANSCRIPT TRUNCATED]"
     : sentenceTranscript;
 
-  const truncatedTranscript = transcript.length > 15000
-    ? transcript.substring(0, 15000) + "..."
-    : transcript;
+  const truncatedTranscript = "";
+
 
   const contentTypeGuides: Record<string, string> = {
-    general: `You're looking for moments that make a viewer stop scrolling.
-A great clip tells a mini-story: here's something interesting → oh wait, here's why it matters. Pick the part that a person would send to their friend saying "listen to this."
-Clip however many sentences it takes to tell that moment — whether it's one sentence or twenty.
-If the whole video is dry, at least find the most surprising or information-dense part.`,
+    general: `Look for stop-scrolling moments. Mini-story: interesting → here's why it matters. Pick what someone would send a friend.`,
 
-    funny: `Comedy is about the beat. The setup, the punchline, the reaction.
-Don't cut the setup — without it the punchline has no power. Don't cut the reaction — that's half the fun.
-If it's a long story that builds to a hilarious payoff, take the whole story. If it's a quick one-liner, take just theline and the laugh.
-The clip should make someone laugh even if they haven't seen the rest of the video.
-Trust your gut: if you smiled, clip it.`,
+    funny: `Comedy = setup + punchline + reaction. Don't cut the beat. If you smiled, clip it.`,
 
-    podcast: `Podcasts are about people saying interesting things. Think like a clip hunter.
-When a guest starts a story with "this one time" or "the craziest part was" — that's your opening. Let the story play out naturally. If it takes 30 sentences over two minutes to tell the full story, that's your clip. The viewer will watch every second if it's compelling.
-Avoid: introductions, sponsor reads, tangents that go nowhere, the host saying "let me stop you there."
-If the conversation goes back and forth between two people having a great dynamic, capture the whole exchange. The chemistry is the content.`,
+    podcast: `Think clip hunter. "This one time" or "craziest part was" = opening. Let stories play out. Avoid intros, sponsor reads, dead tangents. Capture great back-and-forth exchanges.`,
 
-    movie: `Movie clips need context. A single line without context falls flat.
-For dialogue: include the triggering line AND the response. Let the emotional beat land — whether it's anger, heartbreak, or triumph.
-For action: let the viewer feel the tension build before the explosion. Start a few seconds early, let the action breathe.
-For emotional scenes: start where the emotion begins, not where it peaks. Let the viewer experience the whole arc.
-A great movie clip makes someone who's never seen the movie understand exactly why it matters.`,
+    movie: `Need context. Include triggering line AND response. Let emotional beats land. Action: let tension build first. A great clip makes non-viewers understand why it matters.`,
 
-    educational: `People watch educational clips because they want to learn something in 30 seconds instead of 30 minutes. Give them the whole insight.
-Start where the teacher introduces the surprising idea. End when the idea has fully landed — after the example, after the "aha."
-If the explanation needs a setup ("imagine this scenario") and a payoff, include both. A clip that teaches nothing is worthless.
-Look for: "here's what most people don't know", "the key insight is", "this changed everything."
-The best educational clips make the viewer feel smarter after watching.`,
+    educational: `Give the whole insight in 30s. Start at the surprising idea, end after the "aha." Look for "most people don't know", "key insight is."`,
 
-    motivational: `People watch these for the emotional push. Capture the entire arc from struggle to breakthrough.
-If someone's telling a personal failure story, start at the low point and ride through to the lesson learned.
-The raw emotion is what connects — don't sanitize it. Stutters, pauses, voice cracks make it real.
-End on the line that makes the viewer want to get up and do something.`,
+    motivational: `Capture struggle → breakthrough arc. Raw emotion connects. End on the line that makes you want to get up and do something.`,
   };
 
-  const prompt = `You're a video editor going through footage looking for clips that will blow up on Shorts, Reels, and TikTok.
+  const prompt = `You're a video editor finding viral clips for Shorts/Reels/TikTok.
 
-CONTENT TYPE: ${contentType.toUpperCase()}
-VIDEO DURATION: ${Math.round(duration)}s
-CLIPS TO PICK: ${topN}
-
-## THE ONE RULE
-
-Cut on complete sentences. Every sentence below has a timestamp. Your clip starts at the first sentence's time and ends at the last sentence's time. Never cut a sentence in half. Never start or end mid-word.
-
-That's the only hard rule. Everything below is just advice.
-
-## VARY THE CLIP SIZES — SMALL, MEDIUM, LARGE
-
-Don't make all clips the same length. Think in three sizes, each matching the content it captures:
-
-**SMALL clip (1-3 sentences, ~5-15 seconds):** A quick punchline. A one-liner reaction. A single surprising fact. A short "wait what" moment. These hit fast and end quick.
-
-**MEDIUM clip (3-10 sentences, ~15-45 seconds):** A full joke with setup + punchline + reaction. One complete story beat. A key insight with explanation. A short back-and-forth exchange. Most clips should be this size.
-
-**LARGE clip (10+ sentences, ~45-120 seconds):** A whole story arc from start to finish. An emotional journey. A deep dive into one topic. A conversation where people go back and forth multiple times. Only use this for content that genuinely needs the space — a great storyteller telling a complete story, a heated debate, a detailed explanation.
-
-Pick a mix of sizes in your ${topN} clips. If you pick 5 clips, maybe 2 small + 2 medium + 1 large. Or 1 small + 3 medium + 1 large. Let the content decide.
-
-## HOW TO READ THE TRANSCRIPT BELOW
-
-The transcript is split into SENTENCES. Each line looks like:
-SENTENCE 1 [0.00s → 2.50s]: This is the sentence text.
-
-If you want a clip from sentence 3 to sentence 8:
-- start_seconds = sentence 3's start time
-- end_seconds = sentence 8's end time
-
-Simple. Just pick which sentences belong in the clip.
-
-## WHAT MAKES A GOOD CLIP
-
-- A viewer should get it without watching anything else. The clip needs to be self-contained — setup and payoff in one package.
-- The first sentence has to hook. If the first sentence is boring, start later. If the last sentence trails off, end earlier or extend to where the thought actually completes.
-- A 10-second joke is fine. A 90-second story is fine. What matters is: does the clip feel complete? If you stop watching and feel like you missed the point, it's too short. If you stop watching because it dragged on, it's too long.
-- Pick the BEST moments, not the ones that fit a specific length. Of all the interesting things said in this video, which ${topN} are the most share-worthy? Those are your clips.
-
-## YOUR STRATEGY FOR THIS TYPE OF CONTENT
-
+CONTENT: ${contentType.toUpperCase()} | ${Math.round(duration)}s | Pick ${topN} clips
+RULE: Cut on sentence boundaries. Each line = timestamp + text. Start=first sentence start, End=last sentence end.
+VARY: Mix small (1-3 sent, 5-15s), medium (3-10 sent, 15-45s), large (10+ sent, 45-120s).
+QUALITY: Self-contained, hook first, complete feeling. Best moments only.
 ${contentTypeGuides[contentType] || contentTypeGuides.general}
 
-## OUTPUT
-
-Return a JSON array of ${topN} clips, best ones first:
-
-[
-  { "start_seconds": number, "end_seconds": number, "score": 1-10, "reason": "short reason" }
-]
-
-- score is an integer 1-10 (10 = most viral)
-- reason is 2-5 words describing the hook
-- Return ONLY the array. No markdown. No code fences. No extra text.
-
-## THE TRANSCRIPT — SENTENCES WITH TIMESTAMPS
-
+SENTENCES:
 ${truncatedSentenceTranscript}
 
-Full text:
-${truncatedTranscript}`;
+Return JSON array: [{"start_seconds":num,"end_seconds":num,"score":1-10,"reason":"2-5 words"}]
+score=10 is most viral. Return ONLY the JSON array.`;
 
   const res = await fetch("/api/clips/score", {
     method: "POST",
