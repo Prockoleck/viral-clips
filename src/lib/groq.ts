@@ -252,7 +252,8 @@ Each B has [start-ends]: text. Clip = consecutive blocks. 15-120s each, mix size
 ${contentTypeGuides[contentType] || contentTypeGuides.general}
 BLOCKS:
 ${truncated}
-JSON: [{"s":start_sec,"e":end_sec,"score":1-10,"reason":"2-5 words"}] ONLY JSON`;
+Return ONLY a JSON array. No text before or after.
+[{"s":start_sec,"e":end_sec,"score":1-10,"reason":"2-5 words"}]`;
 
   const res = await fetch("/api/clips/score", {
     method: "POST",

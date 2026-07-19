@@ -49,7 +49,16 @@ export async function POST(req: NextRequest) {
     try {
       clips = JSON.parse(cleaned);
     } catch {
-      return NextResponse.json({ error: `Invalid JSON from LLM: ${cleaned}` }, { status: 500 });
+      const match = cleaned.match(/\[[\s\S]*\]/);
+      if (match) {
+        try {
+          clips = JSON.parse(match[0]);
+        } catch {
+          return NextResponse.json({ error: `Invalid JSON from LLM: ${cleaned}` }, { status: 500 });
+        }
+      } else {
+        return NextResponse.json({ error: `Invalid JSON from LLM: ${cleaned}` }, { status: 500 });
+      }
     }
 
     return NextResponse.json({ clips });
