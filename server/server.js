@@ -22,7 +22,7 @@ app.use("/api/download", limiter);
 const jobs = new Map();
 
 app.get("/api/health", (_req, res) => {
-  res.json({ status: "ok", version: "1.1.0" });
+  res.json({ status: "ok", version: "1.1.1" });
 });
 
 app.post("/api/download", (req, res) => {
