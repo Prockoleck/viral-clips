@@ -28,7 +28,7 @@ async function getInnertube() {
 }
 
 async function extractFormats(innertube: any, videoId: string, client: string) {
-  const info = await innertube.getBasicInfo(videoId, { client: client as any });
+  const info = await innertube.getInfo(videoId, { client: client as any });
   const sd = info.streaming_data;
   if (!sd) return null;
 
