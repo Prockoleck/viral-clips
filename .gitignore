@@ -4,5 +4,9 @@ out
 uploads/*
 !uploads/.gitkeep
 .env.local
+.env.vercel*
+*.png
+redeploy-back4app.cjs
+tsconfig.tsbuildinfo
 
 .vercel

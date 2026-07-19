@@ -4,6 +4,7 @@ import { useState, useRef } from "react";
 import { getFFmpeg, extractAudio, chunkAudio, cutClips } from "@/lib/ffmpeg";
 import { transcribeAudio, scoreTranscript } from "@/lib/groq";
 import { extractVideoId, fetchYouTubeTranscript } from "@/lib/youtube";
+import { downloadYouTubeClip } from "@/lib/youtube-download";
 import YouTubeClipPlayer from "@/components/YouTubeClipPlayer";
 import type { ClipPick } from "@/lib/groq";
 import type { ClipInfo } from "@/lib/ffmpeg";
@@ -191,22 +192,12 @@ export default function ClipsPage() {
   async function handleDownloadClip(clip: ClipPick, index: number) {
     setDownloadingClip(index);
     try {
-      const res = await fetch("/api/clips/download", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          url: `https://www.youtube.com/watch?v=${youtubeVideoId}`,
-          start: clip.start_seconds,
-          end: clip.end_seconds,
-        }),
-      });
+      const blob = await downloadYouTubeClip(
+        `https://www.youtube.com/watch?v=${youtubeVideoId}`,
+        clip.start_seconds,
+        clip.end_seconds,
+      );
 
-      if (!res.ok) {
-        const err = await res.json();
-        throw new Error(err.error || "Download failed");
-      }
-
-      const blob = await res.blob();
       const blobUrl = URL.createObjectURL(blob);
       const a = document.createElement("a");
       a.href = blobUrl;
