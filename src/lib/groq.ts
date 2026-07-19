@@ -216,7 +216,7 @@ export async function scoreTranscript(
     (s) => s.text.trim().length > 5 && !/^\[/.test(s.text.trim())
   );
 
-  const MAX_SEGS = 300;
+  const MAX_SEGS = 100;
   const segs = filteredSegs.length > MAX_SEGS
     ? (() => {
         const step = filteredSegs.length / MAX_SEGS;
@@ -229,49 +229,30 @@ export async function scoreTranscript(
     : filteredSegs;
 
   const segTranscript = segs
-    .map((s, i) => `BLOCK ${i + 1} [${s.start.toFixed(0)}s-${s.end.toFixed(0)}s]: ${s.text}`)
+    .map((s, i) => `B${i + 1}[${s.start.toFixed(0)}-${s.end.toFixed(0)}s]: ${s.text}`)
     .join("\n");
 
-  const maxChars = 20000;
+  const maxChars = 8000;
   const truncated = segTranscript.length > maxChars
-    ? segTranscript.substring(0, maxChars) + "\n\n[TRUNCATED]"
+    ? segTranscript.substring(0, maxChars) + "\n[TRUNC]"
     : segTranscript;
 
 
   const contentTypeGuides: Record<string, string> = {
-    general: `Look for stop-scrolling moments. Mini-story: interesting → here's why it matters. Pick what someone would send a friend.`,
-
-    funny: `Comedy = setup + punchline + reaction. Don't cut the beat. If you smiled, clip it.`,
-
-    podcast: `Think clip hunter. "This one time" or "craziest part was" = opening. Let stories play out. Avoid intros, sponsor reads, dead tangents. Capture great back-and-forth exchanges.`,
-
-    movie: `Need context. Include triggering line AND response. Let emotional beats land. Action: let tension build first. A great clip makes non-viewers understand why it matters.`,
-
-    educational: `Give the whole insight in 30s. Start at the surprising idea, end after the "aha." Look for "most people don't know", "key insight is."`,
-
-    motivational: `Capture struggle → breakthrough arc. Raw emotion connects. End on the line that makes you want to get up and do something.`,
+    general: `Stop-scrolling moments. Interesting → why it matters. What you'd send a friend.`,
+    funny: `Setup + punchline + reaction. Don't cut the beat.`,
+    podcast: `Clip hunter. "This one time" = opening. Let stories play. Skip intros/sponsors.`,
+    movie: `Context needed. Include trigger + response. Let emotional beats land.`,
+    educational: `Whole insight in 30s. Start at surprising idea, end after "aha".`,
+    motivational: `Struggle → breakthrough arc. Raw emotion. End on the motivating line.`,
   };
 
-  const prompt = `You're a video editor finding viral clips for Shorts/Reels/TikTok.
-
-CONTENT: ${contentType.toUpperCase()} | ${Math.round(duration)}s | Pick ${topN} clips
-
-Each BLOCK below has a time range and text. A clip spans multiple consecutive blocks.
-- Pick a START block and END block for each clip.
-- start_seconds = START block's start time
-- end_seconds = END block's end time
-- CLIPS SHOULD BE 15-120 seconds. Don't pick clips under 15 seconds.
-- Mix sizes: some 15-30s, some 30-60s, some 60-120s.
-- Self-contained: viewer gets the full point without context.
-- Hook first sentence, complete ending.
-
+  const prompt = `Find ${topN} viral clips for Shorts/TikTok. ${contentType.toUpperCase()} ${Math.round(duration)}s video.
+Each B has [start-ends]: text. Clip = consecutive blocks. 15-120s each, mix sizes.
 ${contentTypeGuides[contentType] || contentTypeGuides.general}
-
 BLOCKS:
 ${truncated}
-
-Return JSON array: [{"start_seconds":num,"end_seconds":num,"score":1-10,"reason":"2-5 words"}]
-score=10 most viral. Return ONLY JSON array.`;
+JSON: [{"s":start_sec,"e":end_sec,"score":1-10,"reason":"2-5 words"}] ONLY JSON`;
 
   const res = await fetch("/api/clips/score", {
     method: "POST",
@@ -285,7 +266,13 @@ score=10 most viral. Return ONLY JSON array.`;
   }
 
   const data = await res.json();
-  const rawClips = data.clips as ClipPick[];
+  const raw = data.clips as any[];
+  const rawClips: ClipPick[] = raw.map((c) => ({
+    start_seconds: c.start_seconds ?? c.s ?? 0,
+    end_seconds: c.end_seconds ?? c.e ?? 0,
+    score: c.score ?? 5,
+    reason: c.reason ?? "",
+  }));
 
   const snapped: ClipPick[] = rawClips.map((c) => ({
     ...c,
