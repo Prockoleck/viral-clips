@@ -6,7 +6,7 @@ uploads/*
 .env.local
 .env.vercel*
 *.png
-redeploy-back4app.cjs
+*.cjs
 tsconfig.tsbuildinfo
 
 .vercel

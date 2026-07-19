@@ -7,9 +7,8 @@ let innertubePromise: Promise<any> | null = null;
 async function getInnertube() {
   if (!innertubePromise) {
     innertubePromise = (async () => {
-      const { Innertube, UniversalCache } = await import("youtubei.js");
+      const { Innertube } = await import("youtubei.js");
       return Innertube.create({
-        cache: new UniversalCache(true),
         generate_session_locally: true,
       });
     })();
