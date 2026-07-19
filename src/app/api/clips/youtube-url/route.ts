@@ -27,6 +27,41 @@ async function getInnertube() {
   return innertubePromise;
 }
 
+async function extractFormats(innertube: any, videoId: string, client: string) {
+  const info = await innertube.getBasicInfo(videoId, { client: client as any });
+  const sd = info.streaming_data;
+  if (!sd) return null;
+
+  const player = innertube.session.player;
+  const duration = info.basic_info.duration ?? 0;
+
+  // Try muxed
+  if (sd.formats?.length > 0) {
+    const format = info.chooseFormat({ type: "video+audio", format: "mp4", quality: "best" });
+    const streamUrl = await format.decipher(player);
+    return { mode: "muxed" as const, streamUrl, duration, fileSize: format.content_length ?? 0, quality: format.quality_label ?? "unknown" };
+  }
+
+  // Adaptive
+  if (sd.adaptive_formats?.length > 0) {
+    const videoFormat = info.chooseFormat({ type: "video", format: "mp4", quality: "best" });
+    const audioFormat = info.chooseFormat({ type: "audio", format: "any", quality: "best" });
+    const [videoUrl, audioUrl] = await Promise.all([
+      videoFormat.decipher(player),
+      audioFormat.decipher(player),
+    ]);
+    return {
+      mode: "adaptive" as const,
+      videoUrl, audioUrl, duration,
+      videoQuality: videoFormat.quality_label ?? "unknown",
+      videoSize: videoFormat.content_length ?? 0,
+      audioSize: audioFormat.content_length ?? 0,
+    };
+  }
+
+  return null;
+}
+
 export async function POST(req: NextRequest) {
   try {
     const { url } = await req.json();
@@ -44,80 +79,21 @@ export async function POST(req: NextRequest) {
     const videoId = videoIdMatch[1];
 
     const innertube = await getInnertube();
-    const info = await innertube.getBasicInfo(videoId);
 
-    const streamingData = info.streaming_data;
-    if (!streamingData) {
-      // Try alternate client (ANDROID) which often has more formats
-      const altInfo = await innertube.getBasicInfo(videoId, { client: "ANDROID" });
-      const altStreaming = altInfo.streaming_data;
-      if (!altStreaming) {
-        return NextResponse.json({ error: "No streaming data available" }, { status: 400 });
+    // Try multiple clients
+    for (const client of ["ANDROID", "WEB", "TV_EMBEDDED", "IOS"]) {
+      try {
+        const result = await extractFormats(innertube, videoId, client);
+        if (result) return NextResponse.json(result);
+      } catch {
+        continue;
       }
-      return buildResponse(altInfo, innertube);
     }
 
-    return buildResponse(info, innertube);
+    return NextResponse.json({ error: "No streaming data available for this video" }, { status: 400 });
   } catch (err) {
     const msg = err instanceof Error ? err.message : "Unknown error";
     console.error("YouTube URL extraction error:", msg);
     return NextResponse.json({ error: msg }, { status: 500 });
   }
-}
-
-async function buildResponse(info: any, innertube: any) {
-  const streamingData = info.streaming_data;
-  const player = innertube.session.player;
-  const duration = info.basic_info.duration ?? 0;
-
-  // Try muxed format first
-  const muxedFormats = streamingData.formats;
-  if (muxedFormats && muxedFormats.length > 0) {
-    const format = info.chooseFormat({
-      type: "video+audio",
-      format: "mp4",
-      quality: "best",
-    });
-    const streamUrl = await format.decipher(player);
-    return NextResponse.json({
-      mode: "muxed" as const,
-      streamUrl,
-      duration,
-      fileSize: format.content_length ?? 0,
-      quality: format.quality_label ?? "unknown",
-    });
-  }
-
-  // Fall back to adaptive formats
-  const adaptiveFormats = streamingData.adaptive_formats;
-  if (!adaptiveFormats || adaptiveFormats.length === 0) {
-    return NextResponse.json({ error: "No formats available" }, { status: 400 });
-  }
-
-  const videoFormat = info.chooseFormat({
-    type: "video",
-    format: "mp4",
-    quality: "best",
-  });
-
-  const audioFormat = info.chooseFormat({
-    type: "audio",
-    format: "any",
-    quality: "best",
-  });
-
-  const [videoUrl, audioUrl] = await Promise.all([
-    videoFormat.decipher(player),
-    audioFormat.decipher(player),
-  ]);
-
-  return NextResponse.json({
-    mode: "adaptive" as const,
-    videoUrl,
-    audioUrl,
-    duration,
-    videoQuality: videoFormat.quality_label ?? "unknown",
-    videoSize: videoFormat.content_length ?? 0,
-    audioSize: audioFormat.content_length ?? 0,
-  });
 }
