@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 
 export const runtime = "nodejs";
+export const maxDuration = 60;
 
 let innertubePromise: Promise<any> | null = null;
 
@@ -11,9 +12,10 @@ async function getInnertube() {
 
       Platform.shim.eval = async (data: any) => {
         const vm = await import("vm");
-        const script = new vm.Script(data.output, { filename: "yt-player.js" });
-        const result = script.runInNewContext({}, { timeout: 5000 });
-        return result;
+        const wrappedCode = `(function() {\n${data.output}\n})`;
+        const script = new vm.Script(wrappedCode, { filename: "yt-player.js" });
+        const fn = script.runInNewContext({}, { timeout: 5000 });
+        return fn();
       };
 
       return Innertube.create({
