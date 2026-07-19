@@ -3,6 +3,9 @@ import ytdl from "@distube/ytdl-core";
 
 export const runtime = "nodejs";
 
+// Disable ytdl-core debug file writes (Vercel has read-only filesystem)
+process.env.YTDL_NO_DEBUG_FILE = "1";
+
 export async function POST(req: NextRequest) {
   try {
     const { url, start, end } = await req.json();
