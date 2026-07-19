@@ -5,9 +5,10 @@ export const maxDuration = 60;
 
 let innertubePromise: Promise<any> | null = null;
 
-async function getInnertube() {
-  if (!innertubePromise) {
-    innertubePromise = (async () => {
+async function getInnertube(client?: string) {
+  const cacheKey = client || "default";
+  if (!innertubePromise || client) {
+    const promise = (async () => {
       const { Innertube, Platform } = await import("youtubei.js");
 
       Platform.shim.eval = async (data: any) => {
@@ -21,46 +22,15 @@ async function getInnertube() {
       return Innertube.create({
         lang: "en",
         location: "US",
-        client_type: "ANDROID" as any,
+        client_type: (client || "WEB") as any,
+        generate_session_locally: true,
       });
     })();
+
+    if (!client) innertubePromise = promise;
+    return promise;
   }
   return innertubePromise;
-}
-
-async function extractFormats(innertube: any, videoId: string, client: string) {
-  const info = await innertube.getInfo(videoId, { client: client as any });
-  const sd = info.streaming_data;
-  if (!sd) return null;
-
-  const player = innertube.session.player;
-  const duration = info.basic_info.duration ?? 0;
-
-  // Try muxed
-  if (sd.formats?.length > 0) {
-    const format = info.chooseFormat({ type: "video+audio", format: "mp4", quality: "best" });
-    const streamUrl = await format.decipher(player);
-    return { mode: "muxed" as const, streamUrl, duration, fileSize: format.content_length ?? 0, quality: format.quality_label ?? "unknown" };
-  }
-
-  // Adaptive
-  if (sd.adaptive_formats?.length > 0) {
-    const videoFormat = info.chooseFormat({ type: "video", format: "mp4", quality: "best" });
-    const audioFormat = info.chooseFormat({ type: "audio", format: "any", quality: "best" });
-    const [videoUrl, audioUrl] = await Promise.all([
-      videoFormat.decipher(player),
-      audioFormat.decipher(player),
-    ]);
-    return {
-      mode: "adaptive" as const,
-      videoUrl, audioUrl, duration,
-      videoQuality: videoFormat.quality_label ?? "unknown",
-      videoSize: videoFormat.content_length ?? 0,
-      audioSize: audioFormat.content_length ?? 0,
-    };
-  }
-
-  return null;
 }
 
 export async function POST(req: NextRequest) {
@@ -79,14 +49,44 @@ export async function POST(req: NextRequest) {
     }
     const videoId = videoIdMatch[1];
 
-    const innertube = await getInnertube();
-
-    // Try ANDROID first, then WEB fallback
-    for (const client of ["ANDROID", "WEB"]) {
+    // Try different client types
+    for (const clientType of ["WEB", "ANDROID", "TV_EMBEDDED"]) {
       try {
-        const result = await extractFormats(innertube, videoId, client);
-        if (result) return NextResponse.json(result);
-      } catch {
+        const innertube = await getInnertube(clientType);
+        const info = await innertube.getInfo(videoId);
+        const sd = info.streaming_data;
+        if (!sd) continue;
+
+        const player = innertube.session.player;
+        const duration = info.basic_info.duration ?? 0;
+
+        if (sd.formats?.length > 0) {
+          const format = info.chooseFormat({ type: "video+audio", format: "mp4", quality: "best" });
+          const streamUrl = await format.decipher(player);
+          return NextResponse.json({
+            mode: "muxed" as const,
+            streamUrl, duration,
+            fileSize: format.content_length ?? 0,
+            quality: format.quality_label ?? "unknown",
+          });
+        }
+
+        if (sd.adaptive_formats?.length > 0) {
+          const vf = info.chooseFormat({ type: "video", format: "mp4", quality: "best" });
+          const af = info.chooseFormat({ type: "audio", format: "any", quality: "best" });
+          const [videoUrl, audioUrl] = await Promise.all([
+            vf.decipher(player), af.decipher(player),
+          ]);
+          return NextResponse.json({
+            mode: "adaptive" as const,
+            videoUrl, audioUrl, duration,
+            videoQuality: vf.quality_label ?? "unknown",
+            videoSize: vf.content_length ?? 0,
+            audioSize: af.content_length ?? 0,
+          });
+        }
+      } catch (e) {
+        console.error(`Client ${clientType} failed:`, e instanceof Error ? e.message : e);
         continue;
       }
     }
