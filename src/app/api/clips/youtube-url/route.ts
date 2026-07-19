@@ -43,7 +43,7 @@ export async function POST(req: NextRequest) {
     const videoId = videoIdMatch[1];
 
     const innertube = await getInnertube();
-    const info = await innertube.getBasicInfo(videoId);
+    const info = await innertube.getInfo(videoId);
 
     const streamingData = info.streaming_data;
     if (!streamingData) {
