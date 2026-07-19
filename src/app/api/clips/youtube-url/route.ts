@@ -7,7 +7,12 @@ let innertubePromise: Promise<any> | null = null;
 async function getInnertube() {
   if (!innertubePromise) {
     innertubePromise = (async () => {
-      const { Innertube } = await import("youtubei.js");
+      const { Innertube, Platform } = await import("youtubei.js");
+
+      Platform.shim.eval = async (data: any) => {
+        return new Function(`return (${data.output})`)();
+      };
+
       return Innertube.create({
         generate_session_locally: true,
       });
