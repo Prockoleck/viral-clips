@@ -6,4 +6,3 @@ uploads/*
 .env.local
 
 .vercel
-server/
