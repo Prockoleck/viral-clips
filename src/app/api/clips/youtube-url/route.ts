@@ -1,10 +1,21 @@
 import { NextRequest, NextResponse } from "next/server";
-import ytdl from "@distube/ytdl-core";
 
 export const runtime = "nodejs";
 
-// Disable ytdl-core debug file writes (Vercel has read-only filesystem)
-process.env.YTDL_NO_DEBUG_FILE = "1";
+let innertubePromise: Promise<any> | null = null;
+
+async function getInnertube() {
+  if (!innertubePromise) {
+    innertubePromise = (async () => {
+      const { Innertube, UniversalCache } = await import("youtubei.js");
+      return Innertube.create({
+        cache: new UniversalCache(true),
+        generate_session_locally: true,
+      });
+    })();
+  }
+  return innertubePromise;
+}
 
 export async function POST(req: NextRequest) {
   try {
@@ -17,26 +28,41 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: "Missing start/end" }, { status: 400 });
     }
 
-    const agent = ytdl.createAgent();
+    const videoIdMatch = url.match(
+      /(?:youtu\.be\/|v=|embed\/|shorts\/)([a-zA-Z0-9_-]{11})/
+    );
+    if (!videoIdMatch) {
+      return NextResponse.json({ error: "Invalid YouTube URL" }, { status: 400 });
+    }
+    const videoId = videoIdMatch[1];
 
-    const info = await ytdl.getInfo(url, { agent });
-    const format = ytdl.chooseFormat(info.formats, {
-      quality: "highestvideo",
-      filter: (f) => f.container === "mp4" && f.hasVideo && f.hasAudio,
-    });
+    const innertube = await getInnertube();
+    const info = await innertube.getBasicInfo(videoId);
 
-    if (!format || !format.url) {
-      return NextResponse.json({ error: "No suitable format found" }, { status: 400 });
+    const muxed = info.streaming_data?.formats;
+    if (!muxed || muxed.length === 0) {
+      return NextResponse.json({ error: "No muxed formats available" }, { status: 400 });
     }
 
-    const duration = info.videoDetails.lengthSeconds;
-    const fileSize = format.contentLength ? parseInt(format.contentLength) : 0;
+    const format = info.chooseFormat({
+      type: "video+audio",
+      format: "mp4",
+      quality: "best",
+    });
+
+    const streamUrl = await format.decipher(innertube.session.player);
+    if (!streamUrl) {
+      return NextResponse.json({ error: "Failed to decipher stream URL" }, { status: 500 });
+    }
+
+    const duration = info.basic_info.duration ?? 0;
+    const fileSize = format.content_length ?? 0;
 
     return NextResponse.json({
-      streamUrl: format.url,
-      duration: parseFloat(duration),
+      streamUrl,
+      duration,
       fileSize,
-      quality: format.qualityLabel || "unknown",
+      quality: format.quality_label ?? "unknown",
     });
   } catch (err) {
     const msg = err instanceof Error ? err.message : "Unknown error";
