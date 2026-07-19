@@ -14,7 +14,9 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: "Missing start/end" }, { status: 400 });
     }
 
-    const info = await ytdl.getInfo(url);
+    const agent = ytdl.createAgent();
+
+    const info = await ytdl.getInfo(url, { agent });
     const format = ytdl.chooseFormat(info.formats, {
       quality: "highestvideo",
       filter: (f) => f.container === "mp4" && f.hasVideo && f.hasAudio,
