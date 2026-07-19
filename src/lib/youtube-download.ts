@@ -34,18 +34,19 @@ export async function downloadYouTubeClip(
     const startByte = Math.max(0, Math.floor(paddedStart * bytesPerSec));
     const endByte = Math.min(fileSize - 1, Math.ceil((endSec + PADDING) * bytesPerSec));
 
-    const rangeRes = await fetch(streamUrl, {
-      headers: { Range: `bytes=${startByte}-${endByte}` },
-    });
+    const proxyUrl = `/api/clips/proxy-stream?url=${encodeURIComponent(streamUrl)}&range=bytes=${startByte}-${endByte}`;
+    const rangeRes = await fetch(proxyUrl);
 
     if (rangeRes.status === 206 || rangeRes.ok) {
       videoData = new Uint8Array(await rangeRes.arrayBuffer());
     } else {
-      const fullRes = await fetch(streamUrl);
+      const fullProxyUrl = `/api/clips/proxy-stream?url=${encodeURIComponent(streamUrl)}`;
+      const fullRes = await fetch(fullProxyUrl);
       videoData = new Uint8Array(await fullRes.arrayBuffer());
     }
   } else {
-    const fullRes = await fetch(streamUrl);
+    const fullProxyUrl = `/api/clips/proxy-stream?url=${encodeURIComponent(streamUrl)}`;
+    const fullRes = await fetch(fullProxyUrl);
     videoData = new Uint8Array(await fullRes.arrayBuffer());
   }
 
