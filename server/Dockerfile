@@ -8,7 +8,7 @@ RUN curl --http1.1 -L https://github.com/yt-dlp/yt-dlp/releases/latest/download/
 WORKDIR /app
 
 COPY package*.json ./
-RUN npm ci --omit=dev
+RUN npm install --omit=dev
 
 COPY server.js ./
 
