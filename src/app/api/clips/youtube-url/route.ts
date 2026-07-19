@@ -21,6 +21,7 @@ async function getInnertube() {
       return Innertube.create({
         lang: "en",
         location: "US",
+        client_type: "ANDROID" as any,
       });
     })();
   }
@@ -80,8 +81,8 @@ export async function POST(req: NextRequest) {
 
     const innertube = await getInnertube();
 
-    // Try multiple clients
-    for (const client of ["ANDROID", "WEB", "TV_EMBEDDED", "IOS"]) {
+    // Try ANDROID first, then WEB fallback
+    for (const client of ["ANDROID", "WEB"]) {
       try {
         const result = await extractFormats(innertube, videoId, client);
         if (result) return NextResponse.json(result);
