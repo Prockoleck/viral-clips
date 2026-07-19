@@ -10,7 +10,10 @@ async function getInnertube() {
       const { Innertube, Platform } = await import("youtubei.js");
 
       Platform.shim.eval = async (data: any) => {
-        return new Function(`return (${data.output})`)();
+        const vm = await import("vm");
+        const script = new vm.Script(data.output, { filename: "yt-player.js" });
+        const result = script.runInNewContext({}, { timeout: 5000 });
+        return result;
       };
 
       return Innertube.create({
