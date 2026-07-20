@@ -1,90 +1,82 @@
 import { NextRequest, NextResponse } from "next/server";
 
 export const runtime = "nodejs";
-export const maxDuration = 30;
+export const maxDuration = 60;
 
-const INSTANCES = [
-  "https://inv.riverside.rocks",
-  "https://yewtu.be",
-  "https://invidious.snopyta.org",
-  "https://inv.tux.pizza",
-  "https://invidious.privacydev.net",
-  "https://invidious.private.coffee",
-];
+let innertubePromise: Promise<any> | null = null;
 
-async function fetchInvidious(videoId: string): Promise<any> {
-  for (const base of INSTANCES) {
-    try {
-      const res = await fetch(`${base}/api/v1/videos/${videoId}`, {
-        signal: AbortSignal.timeout(8000),
-      });
-      if (!res.ok) continue;
-      const data = await res.json();
-      if (!data || data.error) continue;
-      return data;
-    } catch {
-      continue;
-    }
+async function getInnertube() {
+  if (!innertubePromise) {
+    innertubePromise = (async () => {
+      const { Innertube } = await import("youtubei.js");
+      return Innertube.create({ lang: "en", location: "US" });
+    })();
   }
-  return null;
+  return innertubePromise;
 }
 
 export async function POST(req: NextRequest) {
   try {
     const { url } = await req.json();
-    if (!url || typeof url !== "string") {
+    if (!url || typeof url !== "string")
       return NextResponse.json({ error: "Missing url" }, { status: 400 });
-    }
 
     const m = url.match(/(?:youtu\.be\/|v=|embed\/|shorts\/)([a-zA-Z0-9_-]{11})/);
-    if (!m) {
-      return NextResponse.json({ error: "Invalid YouTube URL" }, { status: 400 });
+    if (!m) return NextResponse.json({ error: "Invalid URL" }, { status: 400 });
+
+    const innertube = await getInnertube();
+
+    let info = await innertube.getInfo(m[1], { client: "ANDROID" as any });
+    let sd = info.streaming_data;
+
+    if (!sd?.formats?.length && !sd?.adaptive_formats?.length) {
+      info = await innertube.getInfo(m[1]);
+      sd = info.streaming_data;
     }
 
-    const data = await fetchInvidious(m[1]);
-    if (!data) {
-      return NextResponse.json({ error: "All instances failed" }, { status: 502 });
+    if (!sd) return NextResponse.json({ error: "No streaming data" }, { status: 400 });
+
+    const duration = info.basic_info.duration ?? 0;
+    const player = innertube.session.player;
+
+    async function decipher(f: any): Promise<string | null> {
+      if (f.url) return f.url;
+      if (f.decipher) try { return await f.decipher(player); } catch { return null; }
+      return null;
     }
 
-    const duration = data.lengthSeconds ?? 0;
-    const streams = data.formatStreams ?? [];
-    const adaptive = data.adaptiveFormats ?? [];
-
-    // Muxed (formatStreams have both video+audio)
-    if (streams.length > 0) {
-      const best = streams.sort((a: any, b: any) => (b.height || 0) - (a.height || 0))[0];
+    // Muxed
+    if (sd.formats?.length) {
+      const f = [...sd.formats].sort((a: any, b: any) => (b.width || 0) - (a.width || 0))[0];
+      const streamUrl = await decipher(f);
+      if (!streamUrl) return NextResponse.json({ error: "No URL" }, { status: 500 });
       return NextResponse.json({
-        mode: "muxed" as const,
-        streamUrl: best.url,
-        duration,
-        fileSize: 0,
-        quality: `${best.height ?? 360}p`,
+        mode: "muxed", streamUrl, duration,
+        fileSize: f.content_length ?? 0,
+        quality: f.quality_label ?? "unknown",
       });
     }
 
     // Adaptive
-    const vStreams = adaptive.filter((s: any) => s.type.startsWith("video"));
-    const aStreams = adaptive.filter((s: any) => s.type.startsWith("audio"));
+    const v = sd.adaptive_formats.filter((f: any) => f.hasVideo && !f.hasAudio)
+      .sort((a: any, b: any) => (b.width || 0) - (a.width || 0))[0];
+    const a = sd.adaptive_formats.filter((f: any) => f.hasAudio && !f.hasVideo)
+      .sort((a: any, b: any) => (b.bitrate || 0) - (a.bitrate || 0))[0];
 
-    if (vStreams.length === 0 || aStreams.length === 0) {
-      return NextResponse.json({ error: "No suitable streams" }, { status: 400 });
-    }
+    if (!v || !a) return NextResponse.json({ error: "No adaptive formats" }, { status: 400 });
 
-    const bestV = vStreams.sort((a: any, b: any) => (b.height || 0) - (a.height || 0))[0];
-    const bestA = aStreams.sort((a: any, b: any) => (b.bitrate || 0) - (a.bitrate || 0))[0];
+    const [vu, au] = await Promise.all([decipher(v), decipher(a)]);
+    if (!vu || !au) return NextResponse.json({ error: "No URL" }, { status: 500 });
 
     return NextResponse.json({
-      mode: "adaptive" as const,
-      videoUrl: bestV.url,
-      audioUrl: bestA.url,
-      duration,
-      videoQuality: `${bestV.height ?? 360}p`,
-      videoSize: 0,
-      audioSize: 0,
+      mode: "adaptive", videoUrl: vu, audioUrl: au, duration,
+      videoQuality: v.quality_label ?? `${v.width ?? 360}p`,
+      videoSize: v.content_length ?? 0,
+      audioSize: a.content_length ?? 0,
     });
   } catch (err) {
-    const msg = err instanceof Error ? err.message : "Unknown";
-    console.error("Invidious error:", msg);
+    const msg = err instanceof Error ? err.message : "Unknown err";
+    console.error("youtubei.js error:", msg);
     return NextResponse.json({ error: msg }, { status: 500 });
   }
 }
