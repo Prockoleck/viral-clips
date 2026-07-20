@@ -3,12 +3,11 @@ import { NextRequest, NextResponse } from "next/server";
 export const runtime = "nodejs";
 export const maxDuration = 60;
 
-let innertubePromise: Promise<any> | null = null;
+let innertubePromise: Record<string, Promise<any>> = {};
 
-async function getInnertube(client?: string) {
-  const cacheKey = client || "default";
-  if (!innertubePromise || client) {
-    const promise = (async () => {
+async function getInnertube(clientType: string) {
+  if (!innertubePromise[clientType]) {
+    innertubePromise[clientType] = (async () => {
       const { Innertube, Platform } = await import("youtubei.js");
 
       Platform.shim.eval = async (data: any) => {
@@ -22,15 +21,12 @@ async function getInnertube(client?: string) {
       return Innertube.create({
         lang: "en",
         location: "US",
-        client_type: (client || "WEB") as any,
+        client_type: clientType as any,
         generate_session_locally: true,
       });
     })();
-
-    if (!client) innertubePromise = promise;
-    return promise;
   }
-  return innertubePromise;
+  return innertubePromise[clientType];
 }
 
 export async function POST(req: NextRequest) {
@@ -49,20 +45,20 @@ export async function POST(req: NextRequest) {
     }
     const videoId = videoIdMatch[1];
 
-    // Try different client types
-    for (const clientType of ["WEB", "ANDROID", "TV_EMBEDDED"]) {
+    for (const clientType of ["TV_EMBEDDED", "WEB"]) {
       try {
         const innertube = await getInnertube(clientType);
         const info = await innertube.getInfo(videoId);
         const sd = info.streaming_data;
-        if (!sd) continue;
+        if (!sd?.formats?.length && !sd?.adaptive_formats?.length) continue;
 
         const player = innertube.session.player;
         const duration = info.basic_info.duration ?? 0;
 
-        if (sd.formats?.length > 0) {
+        // Prefer muxed
+        if (sd.formats?.length) {
           const format = info.chooseFormat({ type: "video+audio", format: "mp4", quality: "best" });
-          const streamUrl = await format.decipher(player);
+          const streamUrl = format.url || (await format.decipher(player));
           return NextResponse.json({
             mode: "muxed" as const,
             streamUrl, duration,
@@ -71,22 +67,21 @@ export async function POST(req: NextRequest) {
           });
         }
 
-        if (sd.adaptive_formats?.length > 0) {
-          const vf = info.chooseFormat({ type: "video", format: "mp4", quality: "best" });
-          const af = info.chooseFormat({ type: "audio", format: "any", quality: "best" });
-          const [videoUrl, audioUrl] = await Promise.all([
-            vf.decipher(player), af.decipher(player),
-          ]);
-          return NextResponse.json({
-            mode: "adaptive" as const,
-            videoUrl, audioUrl, duration,
-            videoQuality: vf.quality_label ?? "unknown",
-            videoSize: vf.content_length ?? 0,
-            audioSize: af.content_length ?? 0,
-          });
-        }
+        // Adaptive
+        const vf = info.chooseFormat({ type: "video", format: "mp4", quality: "best" });
+        const af = info.chooseFormat({ type: "audio", format: "any", quality: "best" });
+        const [videoUrl, audioUrl] = await Promise.all([
+          vf.url || vf.decipher(player),
+          af.url || af.decipher(player),
+        ]);
+        return NextResponse.json({
+          mode: "adaptive" as const,
+          videoUrl, audioUrl, duration,
+          videoQuality: vf.quality_label ?? "unknown",
+          videoSize: vf.content_length ?? 0,
+          audioSize: af.content_length ?? 0,
+        });
       } catch (e) {
-        console.error(`Client ${clientType} failed:`, e instanceof Error ? e.message : e);
         continue;
       }
     }
