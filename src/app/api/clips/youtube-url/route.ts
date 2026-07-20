@@ -3,26 +3,25 @@ import { NextRequest, NextResponse } from "next/server";
 export const runtime = "nodejs";
 export const maxDuration = 30;
 
-const PIPED_INSTANCES = [
-  "https://pipedapi.kavin.rocks",
-  "https://pipedapi.syncpundit.io",
-  "https://pipedapi.moomoo.me",
-  "https://pipedapi.adminforge.de",
-  "https://piped-api.lunar.icu",
-  "https://pipedapi.r4fo.com",
-  "https://pipedapi.leptons.xyz",
-  "https://pipedapi.colinslegacy.com",
+const INSTANCES = [
+  "https://inv.riverside.rocks",
+  "https://yewtu.be",
+  "https://invidious.snopyta.org",
+  "https://inv.tux.pizza",
+  "https://invidious.privacydev.net",
+  "https://invidious.private.coffee",
 ];
 
-async function fetchPiped(videoId: string): Promise<any> {
-  for (const base of PIPED_INSTANCES) {
+async function fetchInvidious(videoId: string): Promise<any> {
+  for (const base of INSTANCES) {
     try {
-      const res = await fetch(`${base}/streams/${videoId}`, {
-        signal: AbortSignal.timeout(10000),
-        headers: { Accept: "application/json" },
+      const res = await fetch(`${base}/api/v1/videos/${videoId}`, {
+        signal: AbortSignal.timeout(8000),
       });
       if (!res.ok) continue;
-      return res.json();
+      const data = await res.json();
+      if (!data || data.error) continue;
+      return data;
     } catch {
       continue;
     }
@@ -42,63 +41,50 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: "Invalid YouTube URL" }, { status: 400 });
     }
 
-    const data = await fetchPiped(m[1]);
+    const data = await fetchInvidious(m[1]);
     if (!data) {
-      return NextResponse.json({ error: "All Piped instances failed" }, { status: 502 });
+      return NextResponse.json({ error: "All instances failed" }, { status: 502 });
     }
 
-    const duration = data.duration ?? 0;
+    const duration = data.lengthSeconds ?? 0;
+    const streams = data.formatStreams ?? [];
+    const adaptive = data.adaptiveFormats ?? [];
 
-    // Try muxed (video+audio combined) — videoOnly: false
-    const muxed = data.videoStreams?.filter?.((s: any) => !s.videoOnly) ?? [];
-    if (muxed.length > 0) {
-      const best = muxed.sort((a: any, b: any) => {
-        const qa = parseInt(a.quality) || 0;
-        const qb = parseInt(b.quality) || 0;
-        return qb - qa;
-      })[0];
-
+    // Muxed (formatStreams have both video+audio)
+    if (streams.length > 0) {
+      const best = streams.sort((a: any, b: any) => (b.height || 0) - (a.height || 0))[0];
       return NextResponse.json({
         mode: "muxed" as const,
         streamUrl: best.url,
         duration,
         fileSize: 0,
-        quality: best.quality ?? "unknown",
+        quality: `${best.height ?? 360}p`,
       });
     }
 
-    // Adaptive (separate video + audio)
-    const vStreams = data.videoStreams?.filter?.((s: any) => s.videoOnly) ?? [];
-    const aStreams = data.audioStreams ?? [];
+    // Adaptive
+    const vStreams = adaptive.filter((s: any) => s.type.startsWith("video"));
+    const aStreams = adaptive.filter((s: any) => s.type.startsWith("audio"));
 
     if (vStreams.length === 0 || aStreams.length === 0) {
       return NextResponse.json({ error: "No suitable streams" }, { status: 400 });
     }
 
-    const bestV = vStreams.sort((a: any, b: any) => {
-      const qa = parseInt(a.quality) || 0;
-      const qb = parseInt(b.quality) || 0;
-      return qb - qa;
-    })[0];
-
-    const bestA = aStreams.sort((a: any, b: any) => {
-      const qa = parseInt(a.quality) || 0;
-      const qb = parseInt(b.quality) || 0;
-      return qb - qa;
-    })[0];
+    const bestV = vStreams.sort((a: any, b: any) => (b.height || 0) - (a.height || 0))[0];
+    const bestA = aStreams.sort((a: any, b: any) => (b.bitrate || 0) - (a.bitrate || 0))[0];
 
     return NextResponse.json({
       mode: "adaptive" as const,
       videoUrl: bestV.url,
       audioUrl: bestA.url,
       duration,
-      videoQuality: bestV.quality ?? "unknown",
+      videoQuality: `${bestV.height ?? 360}p`,
       videoSize: 0,
       audioSize: 0,
     });
   } catch (err) {
     const msg = err instanceof Error ? err.message : "Unknown";
-    console.error("Piped error:", msg);
+    console.error("Invidious error:", msg);
     return NextResponse.json({ error: msg }, { status: 500 });
   }
 }
