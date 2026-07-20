@@ -3,7 +3,7 @@ import { NextRequest, NextResponse } from "next/server";
 export const runtime = "nodejs";
 export const maxDuration = 120;
 
-const HF_SPACE = process.env.HF_SPACE_URL || "";
+const YTDL_SERVER = process.env.YTDL_SERVER_URL || "";
 
 let innertubePromise: Promise<any> | null = null;
 
@@ -58,10 +58,10 @@ async function tryYoutubei(videoId: string): Promise<NextResponse | null> {
   return null;
 }
 
-async function tryHF(videoId: string) {
-  if (!HF_SPACE) return null;
+async function tryReplit(videoId: string) {
+  if (!YTDL_SERVER) return null;
   try {
-    const res = await fetch(`${HF_SPACE}/`, {
+    const res = await fetch(`${YTDL_SERVER}/`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ url: `https://www.youtube.com/watch?v=${videoId}` }),
@@ -96,11 +96,11 @@ export async function POST(req: NextRequest) {
     const result = await tryYoutubei(videoId);
     if (result) return result;
 
-    const fallback = await tryHF(videoId);
+    const fallback = await tryReplit(videoId);
     if (fallback) return fallback;
 
     return NextResponse.json(
-      { error: "No streaming data. Set HF_SPACE_URL env var for full coverage." },
+      { error: "No streaming data. Set YTDL_SERVER_URL env var for full coverage." },
       { status: 400 }
     );
   } catch (err) {
