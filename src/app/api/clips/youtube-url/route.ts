@@ -1,7 +1,9 @@
 import { NextRequest, NextResponse } from "next/server";
 
 export const runtime = "nodejs";
-export const maxDuration = 60;
+export const maxDuration = 120;
+
+const HF_SPACE = process.env.HF_SPACE_URL || "";
 
 let innertubePromise: Promise<any> | null = null;
 
@@ -15,6 +17,70 @@ async function getInnertube() {
   return innertubePromise;
 }
 
+async function tryYoutubei(videoId: string): Promise<NextResponse | null> {
+  try {
+    const innertube = await getInnertube();
+
+    let info = await innertube.getInfo(videoId, { client: "ANDROID" as any });
+    let sd = info.streaming_data;
+
+    if (!sd?.formats?.length && !sd?.adaptive_formats?.length) {
+      info = await innertube.getInfo(videoId);
+      sd = info.streaming_data;
+    }
+    if (!sd) return null;
+
+    const duration = info.basic_info.duration ?? 0;
+    const player = innertube.session.player;
+
+    async function url(f: any): Promise<string | null> {
+      if (f.url) return f.url;
+      if (f.decipher) try { return await f.decipher(player); } catch { return null; }
+      return null;
+    }
+
+    if (sd.formats?.length) {
+      const f = [...sd.formats].sort((a: any, b: any) => (b.width || 0) - (a.width || 0))[0];
+      const u = await url(f);
+      if (u) return NextResponse.json({ mode: "muxed", streamUrl: u, duration, fileSize: f.content_length ?? 0, quality: f.quality_label ?? "unknown" });
+    }
+
+    const v = sd.adaptive_formats?.filter((f: any) => f.hasVideo && !f.hasAudio)
+      .sort((a: any, b: any) => (b.width || 0) - (a.width || 0))[0];
+    const a = sd.adaptive_formats?.filter((f: any) => f.hasAudio && !f.hasVideo)
+      .sort((a: any, b: any) => (b.bitrate || 0) - (a.bitrate || 0))[0];
+
+    if (v && a) {
+      const [vu, au] = await Promise.all([url(v), url(a)]);
+      if (vu && au) return NextResponse.json({ mode: "adaptive", videoUrl: vu, audioUrl: au, duration, videoQuality: v.quality_label ?? `${v.width ?? 360}p`, videoSize: v.content_length ?? 0, audioSize: a.content_length ?? 0 });
+    }
+  } catch {}
+  return null;
+}
+
+async function tryHF(videoId: string) {
+  if (!HF_SPACE) return null;
+  try {
+    const res = await fetch(`${HF_SPACE}/`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ url: `https://www.youtube.com/watch?v=${videoId}` }),
+      signal: AbortSignal.timeout(60000),
+    });
+    if (!res.ok) return null;
+    const data = await res.json();
+    if (!data.streamUrl) return null;
+    return NextResponse.json({
+      mode: "muxed",
+      streamUrl: data.streamUrl,
+      duration: data.duration ?? 0,
+      fileSize: 0,
+      quality: data.resolution ?? "unknown",
+    });
+  } catch {}
+  return null;
+}
+
 export async function POST(req: NextRequest) {
   try {
     const { url } = await req.json();
@@ -22,61 +88,23 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: "Missing url" }, { status: 400 });
 
     const m = url.match(/(?:youtu\.be\/|v=|embed\/|shorts\/)([a-zA-Z0-9_-]{11})/);
-    if (!m) return NextResponse.json({ error: "Invalid URL" }, { status: 400 });
+    if (!m)
+      return NextResponse.json({ error: "Invalid URL" }, { status: 400 });
 
-    const innertube = await getInnertube();
+    const videoId = m[1];
 
-    let info = await innertube.getInfo(m[1], { client: "ANDROID" as any });
-    let sd = info.streaming_data;
+    const result = await tryYoutubei(videoId);
+    if (result) return result;
 
-    if (!sd?.formats?.length && !sd?.adaptive_formats?.length) {
-      info = await innertube.getInfo(m[1]);
-      sd = info.streaming_data;
-    }
+    const fallback = await tryHF(videoId);
+    if (fallback) return fallback;
 
-    if (!sd) return NextResponse.json({ error: "No streaming data" }, { status: 400 });
-
-    const duration = info.basic_info.duration ?? 0;
-    const player = innertube.session.player;
-
-    async function decipher(f: any): Promise<string | null> {
-      if (f.url) return f.url;
-      if (f.decipher) try { return await f.decipher(player); } catch { return null; }
-      return null;
-    }
-
-    // Muxed
-    if (sd.formats?.length) {
-      const f = [...sd.formats].sort((a: any, b: any) => (b.width || 0) - (a.width || 0))[0];
-      const streamUrl = await decipher(f);
-      if (!streamUrl) return NextResponse.json({ error: "No URL" }, { status: 500 });
-      return NextResponse.json({
-        mode: "muxed", streamUrl, duration,
-        fileSize: f.content_length ?? 0,
-        quality: f.quality_label ?? "unknown",
-      });
-    }
-
-    // Adaptive
-    const v = sd.adaptive_formats.filter((f: any) => f.hasVideo && !f.hasAudio)
-      .sort((a: any, b: any) => (b.width || 0) - (a.width || 0))[0];
-    const a = sd.adaptive_formats.filter((f: any) => f.hasAudio && !f.hasVideo)
-      .sort((a: any, b: any) => (b.bitrate || 0) - (a.bitrate || 0))[0];
-
-    if (!v || !a) return NextResponse.json({ error: "No adaptive formats" }, { status: 400 });
-
-    const [vu, au] = await Promise.all([decipher(v), decipher(a)]);
-    if (!vu || !au) return NextResponse.json({ error: "No URL" }, { status: 500 });
-
-    return NextResponse.json({
-      mode: "adaptive", videoUrl: vu, audioUrl: au, duration,
-      videoQuality: v.quality_label ?? `${v.width ?? 360}p`,
-      videoSize: v.content_length ?? 0,
-      audioSize: a.content_length ?? 0,
-    });
+    return NextResponse.json(
+      { error: "No streaming data. Set HF_SPACE_URL env var for full coverage." },
+      { status: 400 }
+    );
   } catch (err) {
-    const msg = err instanceof Error ? err.message : "Unknown err";
-    console.error("youtubei.js error:", msg);
+    const msg = err instanceof Error ? err.message : "Unknown";
     return NextResponse.json({ error: msg }, { status: 500 });
   }
 }
